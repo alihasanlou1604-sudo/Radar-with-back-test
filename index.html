@@ -317,10 +317,162 @@ function prevDay(c) {
   for (var i = n - 1; i >= 0; i--) { var d = Math.floor(c[i].t / 864e5); if (d === day - 1) { hi = Math.max(hi, c[i].h); lo = Math.min(lo, c[i].l); k++; } else if (d < day - 1) break; }
   return k >= 20 ? { hi: hi, lo: lo } : null;
 }
+function findShock(c, a) {
+  var n = c.length, best = null;
+  if (n < 30 || !a) return null;
+  for (var i = n - 1; i >= Math.max(21, n - 16); i--) {
+    var k = c[i], rng = k.h - k.l, rv = relVol(c, i);
+    if ((rv != null && rv >= 2.5 && rng >= 1.8 * a) || rng >= 3.2 * a) {
+      var dir = k.c >= k.o ? 'up' : 'down';
+      best = { dir: dir, age: n - 1 - i, o: k.o, c: k.c, h: k.h, l: k.l, rv: rv };
+      break;
+    }
+  }
+  if (!best) return null;
+  var px = c[n - 1].c;
+  if (best.dir === 'up' && px < best.o) return null;
+  if (best.dir === 'down' && px > best.o) return null;
+  return best;
+}
 function htfZones(arr, a, keep) {
   if (!arr || arr.length < 30 || !a) return [];
   var z = findFVGs(arr, a, 0.25), n = arr.length;
   return z.filter(function (f) { return !f.dead && f.end >= n - keep; });
+}
+
+function regimeShift(h) {
+  if (!h || h.length < 40) return null;
+  var n = h.length, sw = swings(h, 2), best = null, j;
+  var H = sw.hi[sw.hi.length - 1], Lw = sw.lo[sw.lo.length - 1];
+  if (H) for (j = H.i + 1; j < n; j++) if (h[j].c > H.p) { if (n - 1 - j <= 8) best = { dir: 'up', age: n - 1 - j, level: H.p }; break; }
+  if (Lw) for (j = Lw.i + 1; j < n; j++) if (h[j].c < Lw.p) { if (n - 1 - j <= 8 && (!best || n - 1 - j < best.age)) best = { dir: 'down', age: n - 1 - j, level: Lw.p }; break; }
+  return best;
+}
+function findRange(c, end, ref) {
+  var tries = [40, 26], t, from, i, hi, lo;
+  for (t = 0; t < tries.length; t++) {
+    from = end - tries[t] + 1; if (from < 5) continue;
+    hi = -Infinity; lo = Infinity;
+    for (i = from; i <= end; i++) { if (c[i].h > hi) hi = c[i].h; if (c[i].l < lo) lo = c[i].l; }
+    var H = hi - lo; if (H < 1.5 * ref || H > 7 * ref) continue;
+    var tH = 0, tL = 0, lh = -10, ll = -10;
+    for (i = from; i <= end; i++) {
+      if (c[i].h >= hi - 0.35 * ref && i - lh >= 3) { tH++; lh = i; }
+      if (c[i].l <= lo + 0.35 * ref && i - ll >= 3) { tL++; ll = i; }
+    }
+    if (tH < 2 || tL < 2) continue;
+    if (Math.abs(c[end].c - c[from].c) > 0.7 * H) continue;
+    return { hi: hi, lo: lo, mid: (hi + lo) / 2, H: H, tH: tH, tL: tL, from: from, end: end };
+  }
+  return null;
+}
+function rangeLean(c, rg, htfDir) {
+  var up = 0, why = [], i, vu = 0, vd = 0, k, lows = [], highs = [], s5 = swings(c.slice(rg.from, rg.end + 1), 2);
+  if (htfDir === 'up') { up++; why.push('روند بالاتر صعودیه'); } else if (htfDir === 'down') { up--; why.push('روند بالاتر نزولیه'); }
+  if (s5.lo.length >= 2 && s5.lo[s5.lo.length - 1].p > s5.lo[0].p + 0.1 * rg.H) { up++; why.push('کف‌ها دارن بالا می‌رن'); }
+  if (s5.hi.length >= 2 && s5.hi[s5.hi.length - 1].p < s5.hi[0].p - 0.1 * rg.H) { up--; why.push('سقف‌ها دارن پایین می‌آن'); }
+  for (i = rg.from; i <= rg.end; i++) { if (c[i].c >= c[i].o) vu += c[i].v || 0; else vd += c[i].v || 0; }
+  if (vu + vd > 0) { if (vu > 1.2 * vd) { up++; why.push('حجم کندل‌های سبز بیشتره'); } else if (vd > 1.2 * vu) { up--; why.push('حجم کندل‌های قرمز بیشتره'); } }
+  var sum = 0, cnt = 0; for (i = Math.max(rg.from, rg.end - 7); i <= rg.end; i++) { sum += (c[i].c - rg.lo) / rg.H; cnt++; }
+  var pos = cnt ? sum / cnt : 0.5;
+  if (pos > 0.65) { up++; why.push('قیمت چسبیده به سقف رنجه'); } else if (pos < 0.35) { up--; why.push('قیمت چسبیده به کف رنجه'); }
+  return { dir: up >= 2 ? 'up' : up <= -2 ? 'down' : 'flat', score: up, why: why };
+}
+function detectRange(cl, ref, htfDir) {
+  var n = cl.length, order = [2, 1, 3, 4, 5, 6, 7, 8, 9, 10, 0], oi;
+  for (oi = 0; oi < order.length; oi++) {
+    var m = order[oi], end = n - 1 - m; if (end < 30) continue;
+    var rg = findRange(cl, end, ref); if (!rg) continue;
+    var brk = null, drift = false, i;
+    for (i = end + 1; i < n; i++) {
+      var k = cl[i];
+      if (k.c > rg.hi + 0.15 * ref || k.c < rg.lo - 0.15 * ref) {
+        var up = k.c > rg.hi, body = Math.abs(k.c - k.o);
+        if (((up && k.c > k.o) || (!up && k.c < k.o)) && body >= 0.6 * ref) brk = { i: i, dir: up ? 'up' : 'down', level: up ? rg.hi : rg.lo };
+        else drift = true;
+        break;
+      }
+    }
+    if (drift) continue;
+    var X = { rg: rg, m: m, state: 'inside', dir: null, brk: null, lean: rangeLean(cl, rg, htfDir) };
+    if (brk) { X.state = 'break'; X.dir = brk.dir; X.brk = brk; }
+    else if (m >= 1) {
+      for (i = Math.max(end + 1, n - 2); i < n; i++) {
+        var q = cl[i];
+        if (q.l < rg.lo - 0.05 * ref && q.c > rg.lo) { X.state = 'sweep'; X.dir = 'up'; X.level = rg.lo; X.ext = X.ext == null ? q.l : Math.min(X.ext, q.l); }
+        else if (q.h > rg.hi + 0.05 * ref && q.c < rg.hi) { X.state = 'sweep'; X.dir = 'down'; X.level = rg.hi; X.ext = X.ext == null ? q.h : Math.max(X.ext, q.h); }
+      }
+    }
+    return X;
+  }
+  return null;
+}
+function evalRange(ctx, side) {
+  var s = side === 'long' ? 1 : -1, want = s > 0 ? 'up' : 'down', X = ctx.rgx;
+  var R = { side: side, veto: null, why: [], reasons: [], warns: [], score: 0 };
+  if (!X || X.state === 'inside') { R.veto = 'رنج فعال هست ولی هنوز نه شکست داره نه شکار لبه'; return R; }
+  if (X.dir !== want) { R.veto = 'ستاپ رنج در جهت مخالفه'; return R; }
+  var rg = X.rg, cl = ctx.cl, n = cl.length, a = ctx.atr, ref = ctx.a100 || a, price = ctx.price, F = ctx.f || {};
+  var lc = cl[n - 1], pc = cl[n - 2], range = Math.max(lc.h - lc.l, 1e-12);
+  var wk = s > 0 ? Math.min(lc.o, lc.c) - lc.l : lc.h - Math.max(lc.o, lc.c);
+  var conf = s > 0 ? (lc.c > lc.o && (wk >= 0.4 * range || lc.c > pc.h)) : (lc.c < lc.o && (wk >= 0.4 * range || lc.c < pc.l));
+  var align, pre = 0, bonus = 0, entry = price, stop, tpFinal, setupQ, i;
+  if (ctx.htf.dir === want) align = ctx.htf.strong ? 24 : 16; else if (ctx.htf.dir === 'flat') align = 8; else align = 0;
+  if (X.state === 'break') {
+    var oppHtf = ctx.htf.dir !== want && ctx.htf.dir !== 'flat';
+    if (oppHtf && !(ctx.b1dir === want || (ctx.shift && ctx.shift.dir === want))) { R.veto = 'شکست رنج خلاف روند بالاتره؛ تا ۱ساعته هم‌جهت نشه وارد نشو'; return R; }
+    var lvl = X.brk.level;
+    for (i = X.brk.i + 1; i < n; i++) if ((s > 0 && cl[i].c < lvl - 0.3 * ref) || (s < 0 && cl[i].c > lvl + 0.3 * ref)) { R.veto = 'شکست رنج برگشته توی رنج؛ شکست فیک بوده'; return R; }
+    if (n - 1 - X.brk.i > 8) { R.veto = 'شکست رنج مدت‌هاست رخ داده'; return R; }
+    var rl = s > 0 ? Math.min(cl[n - 1].l, cl[n - 2].l, cl[n - 3].l) : Math.max(cl[n - 1].h, cl[n - 2].h, cl[n - 3].h);
+    var touched = s > 0 ? rl <= lvl + 0.4 * ref : rl >= lvl - 0.4 * ref;
+    if (!touched) { R.veto = 'شکست رنج شده ولی هنوز ریتست نیومده؛ دنبالش نرو، صبر کن'; R.wait = true; return R; }
+    if ((s > 0 && price < lvl - 0.1 * ref) || (s < 0 && price > lvl + 0.1 * ref)) { R.veto = 'قیمت دوباره وارد رنج شده'; return R; }
+    if (!conf) { R.veto = 'ریتست شده ولی کندل تأیید نیومده؛ صبر کن'; R.wait = true; return R; }
+    stop = s > 0 ? Math.min(rl, lvl) - 0.3 * ref : Math.max(rl, lvl) + 0.3 * ref;
+    tpFinal = s > 0 ? lvl + rg.H : lvl - rg.H;
+    setupQ = 20 + Math.min(4, Math.max(0, rg.tH + rg.tL - 4));
+    R.setup = 'شکست رنج + ریتست';
+    R.reasons.push((s > 0 ? 'سقف' : 'کف') + ' رنج (' + (s > 0 ? rg.tH : rg.tL) + ' برخورد) با کندل قوی شکسته شد و ریتست شد');
+    var rv = relVol(cl, X.brk.i);
+    if (rv != null) { if (rv >= 1.3) { bonus += 6; R.reasons.push('حجم کندل شکست بالا بود (' + rv.toFixed(1) + ' برابر)'); } else if (rv < 0.9) { pre += 8; R.warns.push('شکست با حجم ضعیف بود'); } }
+    if (X.lean.dir === want) { bonus += 4; R.reasons.push('نشانه‌های داخل رنج هم به همین سمت متمایل بود'); } else if (X.lean.dir !== 'flat') { pre += 6; R.warns.push('نشانه‌های داخل رنج به سمت مخالف بود'); }
+  } else {
+    if (ctx.htf.dir !== want && ctx.htf.dir !== 'flat' && ctx.htf.strong) { R.veto = 'شکار لبه‌ی رنج خلاف روند قوی بالاتره'; return R; }
+    if (X.m > 3) { R.veto = 'شکار لبه‌ی رنج قدیمیه'; return R; }
+    if (!conf) { R.veto = 'لبه‌ی رنج شکار شده ولی کندل تأیید نیومده؛ صبر کن'; R.wait = true; return R; }
+    stop = s > 0 ? X.ext - 0.3 * ref : X.ext + 0.3 * ref;
+    tpFinal = s > 0 ? rg.hi - 0.2 * ref : rg.lo + 0.2 * ref;
+    setupQ = 18 + Math.min(4, Math.max(0, rg.tH + rg.tL - 4));
+    R.setup = 'شکار لبه‌ی رنج';
+    R.reasons.push((s > 0 ? 'کف' : 'سقف') + ' رنج (' + (s > 0 ? rg.tL : rg.tH) + ' برخورد) شکار شد و قیمت برگشت داخل رنج');
+    if (X.lean.dir === want) { bonus += 3; R.reasons.push('نشانه‌های داخل رنج هم همین سمت رو تأیید می‌کنه'); }
+  }
+  if (ctx.htf.dir === want) R.reasons.push('هم‌جهت روند ۴ساعته/۱ساعته');
+  var risk = Math.abs(entry - stop), fast = ctx.tf === '5m' || ctx.tf === '15m';
+  var floorR = Math.max((fast ? 1.5 : 1.2) * a, (fast ? 0.006 : 0.005) * entry);
+  if (risk < floorR) { stop = entry - s * floorR; risk = floorR; }
+  if (risk > 4.5 * a || risk > 0.03 * entry) { R.veto = 'استاپ لازم خیلی دوره (بیشتر از ۴.۵ برابر ATR یا ۳٪ قیمت)'; return R; }
+  var tpR = Math.abs(tpFinal - entry) / risk;
+  if ((tpFinal - entry) * s <= 0 || tpR < 2.2) { R.veto = 'هدف رنج (' + tpR.toFixed(1) + ' برابر ریسک) برای این ستاپ کمه'; return R; }
+  tpR = Math.min(tpR, 4);
+  var feeCost = entry * (ctx.feeRate || 0) * 2, feeShare = feeCost / risk, netRR = (tpR * risk - feeCost) / (risk + feeCost);
+  if (feeShare > 0.2) { R.veto = 'کارمزد نسبت به فاصله استاپ زیاده'; return R; }
+  if (netRR < 2) { R.veto = 'ریسک به ریوارد بعد از کارمزد کمتر از ۲ می‌شه'; return R; }
+  if (feeShare > 0.12) { pre += 6; R.warns.push('کارمزد بخش قابل‌توجهی از ریسکه'); }
+  var tps = [{ p: entry + s * 1.5 * risk, r: 1.5, pct: 50 }, { p: entry + s * tpR * risk, r: tpR, pct: 50 }];
+  var expR = 0.5 * 1.5 + 0.5 * tpR;
+  R.reasons.push('ریسک به ریوارد ۱ به ' + tpR.toFixed(1) + ' (بعد از کارمزد ۱ به ' + netRR.toFixed(1) + ')');
+  if (ctx.btc && ctx.btc.dir && ctx.btc.dir !== 'flat') {
+    if (ctx.btc.dir !== want) { pre += ctx.btc.strong ? 14 : 8; R.warns.push('بیت‌کوین خلاف جهت این معامله‌ست' + (ctx.btc.strong ? ' (روند قوی)' : '')); }
+    else R.reasons.push('بیت‌کوین هم‌جهته');
+  }
+  if (F.shock && ctx.shock && ((ctx.shock.dir === 'up' && s < 0) || (ctx.shock.dir === 'down' && s > 0))) { pre += 12; R.warns.push('چند کندل پیش یه حرکت غیرعادی خلاف این معامله بوده'); }
+  var newsPts = ctx.newsSoon ? 0 : 5; if (ctx.newsSoon) R.warns.push('تا ۲ ساعت آینده خبر مهم داریم');
+  R.score = Math.max(0, Math.round(align + setupQ + 15 + 15 + newsPts + bonus - pre));
+  R.entry = entry; R.stop = stop; R.tp = tps[1].p; R.rr = tpR; R.netRR = netRR; R.tps = tps; R.expR = expR;
+  R.limit = false; R.zone = null; R.sweep = { level: X.state === 'break' ? X.brk.level : X.level }; R.counter = false; R.rangeSetup = true;
+  return R;
 }
 function levelsBeyond(entry, s, sw, from) {
   var arr = s > 0 ? sw.hi : sw.lo, out = [];
@@ -336,11 +488,18 @@ function evalSide(ctx, side) {
   var cl = ctx.cl, n = cl.length, a = ctx.atr, price = ctx.price;
   var R = { side: side, veto: null, why: [], reasons: [], warns: [], score: 0 };
   var want = s > 0 ? 'up' : 'down';
-  var align;
+  var align, counter = false, counterReg = false, F0 = ctx.f || {};
   if (ctx.htf.dir === want) align = ctx.htf.strong ? 30 : 18;
   else if (ctx.htf.dir === 'flat') align = 6;
-  else { R.veto = side === 'long' ? 'روند بالاتر نزولیه؛ خرید خلاف روند' : 'روند بالاتر صعوده؛ فروش خلاف روند'; return R; }
+  else {
+    var regOk = !!(F0.reg && ctx.shift && ctx.shift.dir === want);
+    if (!((F0.ct || regOk) && ctx.sw2)) { R.veto = side === 'long' ? 'روند بالاتر نزولیه؛ خرید خلاف روند' : 'روند بالاتر صعوده؛ فروش خلاف روند'; return R; }
+    counter = true; align = regOk ? 8 : 0; counterReg = regOk && !F0.ct;
+    if (regOk) R.reasons.push('ساختار ۱ساعته به‌تازگی به سمت این معامله عوض شده (CHoCH)');
+  }
+  if (F0.reg && ctx.shift && ctx.htf.dir === want && ctx.shift.dir !== want) { R.veto = 'ساختار ۱ساعته ' + (ctx.shift.age + 1) + ' کندل پیش خلاف این جهت عوض شده (CHoCH)؛ روند قبلی مشکوکه، صبر کن'; R.wait = true; return R; }
   if (ctx.htf.dir === want) R.reasons.push((s > 0 ? 'روند ۴ساعته/۱ساعته صعودی' : 'روند ۴ساعته/۱ساعته نزولی') + (ctx.htf.strong ? ' و قوی' : ' ولی ضعیف'));
+  else if (counter) R.warns.push('این معامله خلاف روند تایم‌فریم بالاتره؛ ریسکش بیشتره. اگه واردش شدی حجم رو کمتر بگیر و زود ریسک‌فری کن.');
   else R.warns.push('تایم‌فریم بالاتر بدون روند مشخصه');
 
   var fvg = null, fvgTouched = false, i, f;
@@ -375,6 +534,16 @@ function evalSide(ctx, side) {
     }
   }
   if (!fvg && !sweep) { R.veto = 'FVG فعال نزدیک قیمت یا جمع‌کردن نقدینگی دیده نمی‌شه'; return R; }
+  if (counter) {
+    if (!(fvg && sweep)) { R.veto = 'خلاف روند فقط با ستاپ کامل (FVG + شکار نقدینگی) قابل قبوله'; return R; }
+    var spn = Math.max(ctx.rangeHi - ctx.rangeLo, 1e-12), fr = (price - ctx.rangeLo) / spn, lm = counterReg ? 0.5 : (ctx.htf.strong ? 0.25 : 0.35);
+    if (s > 0 ? fr > lm : fr < 1 - lm) { R.veto = 'خلاف روند فقط وقتی قیمت ته (برای خرید) یا سقف (برای فروش) رنج اخیر باشه'; return R; }
+  }
+  if (F.shock && ctx.shock && ((ctx.shock.dir === 'up' && s < 0) || (ctx.shock.dir === 'down' && s > 0))) {
+    var shT = ctx.shock.dir === 'up' ? 'پامپ' : 'دامپ';
+    if (ctx.shock.age <= 8) { R.veto = 'تا ' + (ctx.shock.age + 1) + ' کندل پیش یه ' + shT + ' با حجم/رنج غیرعادی اومده و این معامله خلافشه؛ صبر کن'; R.wait = true; return R; }
+    pre += 12; R.warns.push('چند کندل پیش یه ' + shT + ' غیرعادی بوده و این معامله خلافشه');
+  }
   if (F.vol) {
     var rv = relVol(cl, fvg ? fvg.mid : sweep.k);
     if (rv != null) {
@@ -419,17 +588,18 @@ function evalSide(ctx, side) {
   var wick = s > 0 ? Math.min(lc.o, lc.c) - lc.l : lc.h - Math.max(lc.o, lc.c);
   var confirmed = s > 0 ? (lc.c > lc.o && (wick >= 0.4 * range || lc.c > pc.h)) : (lc.c < lc.o && (wick >= 0.4 * range || lc.c < pc.l));
   var confirmPts;
+  if (counter && limit) { R.veto = 'خلاف روند فقط با کندل تأیید بسته‌شده (نه لیمیت)'; R.wait = true; return R; }
   if (limit) { confirmPts = 8; R.warns.push('قیمت هنوز به ناحیه نرسیده؛ سفارش لیمیت بگذار'); }
   else if (confirmed) { confirmPts = 15; R.reasons.push('کندل تأیید بسته شده (' + (s > 0 ? 'برگشت صعودی' : 'برگشت نزولی') + ')'); }
   else { R.veto = 'قیمت در ناحیه‌ست ولی کندل تأیید نیومده؛ صبر کن'; R.wait = true; return R; }
 
-  if (!limit && F.mss && ctx.sw2) {
+  if (!limit && (F.mss || counter) && ctx.sw2) {
     var arr2 = s > 0 ? ctx.sw2.hi : ctx.sw2.lo, ref = null, q;
     for (q = arr2.length - 1; q >= 0; q--) { if (arr2[q].i <= n - 3 && arr2[q].i >= n - 16) { ref = arr2[q]; break; } }
     var best3 = s > 0 ? Math.max(cl[n - 1].c, cl[n - 2].c, cl[n - 3].c) : Math.min(cl[n - 1].c, cl[n - 2].c, cl[n - 3].c);
     var okM = ref && (s > 0 ? best3 > ref.p : best3 < ref.p);
     if (!okM) {
-      if (F.mss === 2) { R.veto = 'ساختار کوچیک هنوز به نفع این جهت عوض نشده؛ صبر کن'; R.wait = true; return R; }
+      if (F.mss === 2 || counter) { R.veto = 'ساختار کوچیک هنوز به نفع این جهت عوض نشده؛ صبر کن'; R.wait = true; return R; }
       pre += 10; R.warns.push('ساختار کوچیک هنوز در جهت معامله نشکسته؛ تأیید ضعیف‌تره');
     } else { bonus += 3; R.reasons.push('شکست ساختار کوچیک در جهت معامله (تأیید قوی‌تر)'); }
   }
@@ -466,6 +636,7 @@ function evalSide(ctx, side) {
   var penalty = pre;
   if (tpR == null) { tpR = 2.6; R.warns.push('سقف/کف مشخصی تا هدف نیست؛ هدف ۲.۶ برابر ریسک'); }
   if (obstacle) { penalty += 8; R.warns.push('قبل از هدف یک سقف/کف نزدیک هست'); }
+  if (counter) tpR = Math.min(tpR, 3);
   var tp = entry + s * tpR * risk;
   var feeCost = entry * (ctx.feeRate || 0) * 2;
   var feeShare = feeCost / risk;
@@ -476,6 +647,7 @@ function evalSide(ctx, side) {
   var tps = [{ p: entry + s * 1.5 * risk, r: 1.5 }, { p: tp, r: tpR }], ext = null, rr2;
   for (i = 0; i < lv.length; i++) { rr2 = Math.abs(lv[i] - entry) / risk; if (rr2 > tpR + 0.4 && rr2 <= 6) { ext = rr2; break; } }
   if (ext == null && ctx.htf.dir === want && ctx.htf.strong) ext = Math.min(tpR + 1.0, 5);
+  if (counter) ext = null;
   if (ext != null) tps.push({ p: entry + s * ext * risk, r: ext });
   var pcts = tps.length === 3 ? [40, 35, 25] : [50, 50], expR = 0;
   tps.forEach(function (t, ix) { t.pct = pcts[ix]; expR += t.pct / 100 * t.r; });
@@ -495,7 +667,7 @@ function evalSide(ctx, side) {
   var rrPts = netRR >= 2 ? 15 : 10;
   R.score = Math.max(0, Math.round(align + setupQ + confirmPts + rrPts + pd + newsPts + bonus - penalty));
   R.entry = entry; R.stop = stop; R.tp = tp; R.rr = tpR; R.netRR = netRR; R.tps = tps; R.expR = expR;
-  R.limit = limit; R.zone = zone; R.sweep = sweep;
+  R.limit = limit; R.zone = zone; R.sweep = sweep; R.counter = counter;
   R.setup = fvg && sweep ? 'FVG + شکار نقدینگی' : (fvg ? 'بازگشت به FVG' : 'شکار نقدینگی');
   return R;
 }
@@ -528,6 +700,26 @@ function analyze(p) {
     if (p.tf !== '1h' && p.h1 && p.h1.length > 40) { var h1c = p.h1.slice(0, -1); hz = hz.concat(htfZones(h1c, atr(h1c, 14), 120)); }
     if (p.h4 && p.h4.length > 30) { var h4c = p.h4.slice(0, -1); hz = hz.concat(htfZones(h4c, atr(h4c, 14), 60)); }
     ctx.hz = hz;
+    if (ctx.f.reg) {
+      var sh = null;
+      if (p.tf !== '1h' && p.h1 && p.h1.length > 40) sh = regimeShift(p.h1.slice(0, -1));
+      else if (p.tf === '1h') sh = regimeShift(cl);
+      if (sh && !(htf.dir !== 'flat' && sh.dir === htf.dir)) ctx.shift = sh;
+      out.shift = ctx.shift ? { dir: ctx.shift.dir, age: ctx.shift.age } : null;
+    }
+    ctx.b1dir = b1 ? b1.dir : null;
+    if (ctx.f.rng) {
+      ctx.rgx = detectRange(cl, ctx.a100 || a, htf.dir);
+      if (ctx.rgx) {
+        var X0 = ctx.rgx, f2 = function (x) { return fmt(x); };
+        out.range = { hi: X0.rg.hi, lo: X0.rg.lo, tH: X0.rg.tH, tL: X0.rg.tL, state: X0.state, dir: X0.dir, lean: X0.lean.dir, leanWhy: X0.lean.why };
+        var lt = X0.lean.dir === 'up' ? 'متمایل به شکست رو به بالا' : X0.lean.dir === 'down' ? 'متمایل به شکست رو به پایین' : 'جهت شکست نامشخص';
+        out.range.text = X0.state === 'break' ? ('رنج ' + f2(X0.rg.lo) + ' تا ' + f2(X0.rg.hi) + ' به ' + (X0.dir === 'up' ? 'بالا' : 'پایین') + ' شکسته شده؛ ریتست و کندل تأیید لازمه.')
+          : X0.state === 'sweep' ? ('لبه‌ی ' + (X0.dir === 'up' ? 'پایین' : 'بالا') + ' رنج ' + f2(X0.rg.lo) + ' تا ' + f2(X0.rg.hi) + ' شکار شد.')
+          : ('رنج فعال ' + f2(X0.rg.lo) + ' تا ' + f2(X0.rg.hi) + ' (' + X0.rg.tL + ' برخورد به کف، ' + X0.rg.tH + ' به سقف)؛ ' + lt + '. تا شکست با کندل قوی و ریتست نیومده وارد نشو.');
+      }
+    }
+    ctx.shock = findShock(cl, ctx.a100 || a); out.shock = ctx.shock ? { dir: ctx.shock.dir, age: ctx.shock.age } : null;
   }
   out.price = price; out.atr = a; out.live = ltf[ltf.length - 1].c;
   var lastT = cl[cl.length - 1].t, stepMs = (TF_SEC[p.tf] || 0) * 1000;
@@ -535,15 +727,25 @@ function analyze(p) {
   out.stale = !!(out.closeT && (now - out.closeT) > 2 * stepMs);
   out.bias = { h4: b4.dir, h1: b1 ? b1.dir : null, dir: htf.dir, strong: htf.strong, conflict: !!htf.conflict, why4: b4.why };
   var L = evalSide(ctx, 'long'), S = evalSide(ctx, 'short');
+  if (ctx.rgx && ctx.rgx.state !== 'inside') {
+    var RL = evalRange(ctx, 'long'), RS = evalRange(ctx, 'short');
+    out.rangeEval = { long: RL.veto || ('امتیاز ' + RL.score), short: RS.veto || ('امتیاز ' + RS.score) };
+    if (!RL.veto && (L.veto || RL.score > L.score)) L = RL; else if (L.veto && RL.veto && ctx.rgx.dir === 'up') L.veto = RL.veto;
+    if (!RS.veto && (S.veto || RS.score > S.score)) S = RS; else if (S.veto && RS.veto && ctx.rgx.dir === 'down') S.veto = RS.veto;
+  }
   var cands = [L, S].filter(function (x) { return !x.veto; });
   cands.sort(function (x, y) { return y.score - x.score; });
   var best = cands[0];
   var minScore = cfg.minScore || 70;
   out.view = { candles: ltf.slice(-70), offset: Math.max(0, ltf.length - 70) };
+  if (best && cfg.tp2 && best.tps && best.tps.length > 2) {
+    best.tps = [{ p: best.tps[0].p, r: best.tps[0].r, pct: 50 }, { p: best.tps[1].p, r: best.tps[1].r, pct: 50 }];
+    best.tp = best.tps[1].p; best.rr = best.tps[1].r; best.expR = 0.5 * best.tps[0].r + 0.5 * best.tps[1].r;
+  }
   if (best) {
     out.score = best.score; out.reasons = best.reasons; out.warns = out.warns.concat(best.warns);
     out.entry = best.entry; out.stop = best.stop; out.tp = best.tp; out.rr = best.rr; out.netRR = best.netRR; out.tps = best.tps; out.expR = best.expR;
-    out.limit = best.limit; out.zone = best.zone; out.setup = best.setup; out.side = best.side; out.sweepLevel = best.sweep ? best.sweep.level : null;
+    out.counter = !!best.counter; out.limit = best.limit; out.zone = best.zone; out.setup = best.setup; out.side = best.side; out.sweepLevel = best.sweep ? best.sweep.level : null;
     if (best.score >= minScore) {
       out.verdict = best.side;
       if (out.stale) { out.verdict = 'none'; out.warns.push('داده‌ی کندل‌ها قدیمیه؛ آخرین کندل بسته‌شده مربوط به ' + Math.round((now - out.closeT) / 60000) + ' دقیقه پیشه. سیگنال داده نمی‌شه.'); }
@@ -583,7 +785,8 @@ function advise(q) {
   if (hit >= 1 && !atBE) add('warn', 1, 'TP1 خورده ولی حد ضرر هنوز روی ورود نیست. ریسک‌فری کن تا سود برگشت نخوره.');
   if (hit >= tps.length) return { level: 'good', headline: 'همه‌ی هدف‌ها بسته شد', items: [], rNow: rNow, W: 0 };
   var against = s > 0 ? 'down' : 'up';
-  if (an && an.bias) {
+  if (an && an.shock && an.shock.age <= 1 && ((s > 0 && an.shock.dir === 'down') || (s < 0 && an.shock.dir === 'up'))) add('warn', 2, 'یه کندل شوک (حجم و رنج غیرعادی) خلاف جهت معامله‌ت بسته شد. اگه هنوز ریسک‌فری نشدی، حداقل نصفش رو ببند یا حد ضرر رو جمع کن.');
+  if (an && an.bias && !pos.counter) {
     var a4 = an.bias.h4 === against, a1 = an.bias.h1 === against;
     if (a4 && a1) add('warn', 2, 'روند ۴ساعته و ۱ساعته برعکس جهت معامله شده (' + (s > 0 ? 'نزولی' : 'صعودی') + '). پایه‌ی استراتژی ورود دیگه برقرار نیست.');
     else if (a4 || a1) add('info', 1, 'یکی از روندهای بالاتر (' + (a4 ? '۴ساعته' : '۱ساعته') + ') برعکس شده.');
@@ -707,7 +910,7 @@ var E = (typeof Engine !== 'undefined') ? Engine : require('./engine.js');
 var HAS_DOM = typeof document !== 'undefined';
 
 var DEF = {
-  cfg: { v: 4, f: { htf: 1, vol: 1, daily: 1, sess: 1, vola: 1, mss: 1, ce: 1 }, balance0: 350, riskPct: 0.5, maxOpenRiskPct: 1, dailyLoss: 5, dailyTarget: 6.5, leverage: 5, fee: 0.06, minScore: 70, tf: '15m', auto: false, scanOnOpen: true, watch: ['BTC', 'ZEC', 'ADA', 'DOGE', 'AVAX', 'FIL', 'DOT', 'XLM', 'XRP', 'SOL', 'ICP', 'BNB', 'HYPE', 'LINK'] },
+  cfg: { v: 5, f: { htf: 1, vol: 1, daily: 1, sess: 1, vola: 1, mss: 1, ce: 1, shock: 1, ct: 0, rng: 1, reg: 1 }, tp2: false, balance0: 350, riskPct: 0.5, maxOpenRiskPct: 1, dailyLoss: 5, dailyTarget: 6.5, leverage: 5, fee: 0.06, minScore: 70, tf: '15m', auto: false, scanOnOpen: true, watch: ['BTC', 'ZEC', 'ADA', 'DOGE', 'AVAX', 'FIL', 'DOT', 'XLM', 'XRP', 'SOL', 'ICP', 'BNB', 'HYPE', 'LINK'] },
   trades: [], pos: [], manual: [], news: null
 };
 var st = load();
@@ -722,8 +925,9 @@ function load() {
     var v0 = (r.cfg && +r.cfg.v) || 0;
     if (v0 < 2) o.cfg.watch = DEF.cfg.watch.slice();
     if (v0 < 3) o.cfg.riskPct = 0.5;
-    delete o.cfg.source; if (!o.cfg.f || typeof o.cfg.f !== 'object') o.cfg.f = JSON.parse(JSON.stringify(DEF.cfg.f)); o.cfg.v = 4;
+    delete o.cfg.source; if (!o.cfg.f || typeof o.cfg.f !== 'object') o.cfg.f = JSON.parse(JSON.stringify(DEF.cfg.f)); for (var fk in DEF.cfg.f) if (o.cfg.f[fk] === undefined) o.cfg.f[fk] = DEF.cfg.f[fk]; o.cfg.v = 5;
     if (r.bt) o.bt = r.bt;
+    if (r.abl) o.abl = r.abl;
     if (Array.isArray(r.trades)) o.trades = r.trades;
     if (Array.isArray(r.pos)) o.pos = r.pos.filter(function (p) { return p && p.id && isFinite(p.entry) && isFinite(p.stop) && isFinite(p.qty) && Array.isArray(p.tps); });
     if (Array.isArray(r.manual)) o.manual = r.manual;
@@ -905,7 +1109,7 @@ var ICON = {
 };
 function header() {
   var c = st.cfg, p = todayPnl();
-  return '<div class="head"><div class="wrap"><div class="brand"><h1>رادار ترید</h1><small>فیلتر ستاپ، نه سیگنال تضمینی · نسخه ۴.۰</small></div>' +
+  return '<div class="head"><div class="wrap"><div class="brand"><h1>رادار ترید</h1><small>فیلتر ستاپ، نه سیگنال تضمینی · نسخه ۴.۳</small></div>' +
     '<div class="acct"><div class="bal">' + N(balance()) + ' <span style="font-size:13px;font-weight:400">دلار</span><small>موجودی ژورنال (شروع ' + N(c.balance0, 0) + ')</small></div>' +
     '<div class="todayv ' + (p >= 0 ? 'pos' : 'neg') + '">' + '<span class="n">' + sgn(p) + '</span><small>سود/ضرر ثبت‌شده‌ی امروز</small></div></div></div></div>';
 }
@@ -971,7 +1175,7 @@ function enterPos(r, pending) {
   var z = sizeFor(r); if (z.blocked) return null;
   var p = { id: 'p' + Date.now().toString(36) + Math.random().toString(36).slice(2, 4), sym: r.sym, side: r.verdict, tf: r.tf, entry: r.entry, stop: r.stop, stop0: r.stop,
     tps: (r.tps || [{ p: r.tp, r: r.rr, pct: 100 }]).map(function (t) { return { p: t.p, r: t.r, pct: t.pct }; }), qty: z.qty, remQty: z.qty, notional: z.notional, riskUsd: z.riskUsd,
-    fee: st.cfg.fee / 100, zone: r.zone ? { lo: r.zone.lo, hi: r.zone.hi } : null, sweepLevel: r.sweepLevel || null, openedAt: Date.now(), hit: 0, maxR: 0, realized: 0, limit: !!r.limit, status: pending ? 'pending' : 'open', lastAdv: '' };
+    fee: st.cfg.fee / 100, zone: r.zone ? { lo: r.zone.lo, hi: r.zone.hi } : null, sweepLevel: r.sweepLevel || null, openedAt: Date.now(), hit: 0, maxR: 0, realized: 0, limit: !!r.limit, counter: !!r.counter, status: pending ? 'pending' : 'open', lastAdv: '' };
   openPos().push(p); save(); return p;
 }
 function pnlPart(p, px, q) { var s = p.side === 'long' ? 1 : -1; return (px - p.entry) * s * q - q * p.entry * p.fee - q * px * p.fee; }
@@ -996,7 +1200,7 @@ function monitorPos() {
   return perpMap().then(function () { trackMax(); save(); }, function () {}).then(function () {
     var jobs = list.filter(function (p) { var a = S.an[p.id]; return !S.anBusy[p.id] && (!a || Date.now() - a.at > 120000); }).map(function (p) {
       S.anBusy[p.id] = 1;
-      return analyzeSym(p.sym, p.tf).then(function (a) { S.an[p.id] = { at: Date.now(), bias: a.bias, price: a.price, sides: a.sides }; }, function () {}).then(function () { delete S.anBusy[p.id]; });
+      return analyzeSym(p.sym, p.tf).then(function (a) { S.an[p.id] = { at: Date.now(), bias: a.bias, price: a.price, sides: a.sides, shock: a.shock || null }; }, function () {}).then(function () { delete S.anBusy[p.id]; });
     });
     return Promise.all(jobs);
   });
@@ -1083,6 +1287,8 @@ function card(r) {
   if (r.reasons.length && v !== 'none') h += '<ul class="why">' + r.reasons.map(function (w) { return '<li>' + esc(w) + '</li>'; }).join('') + '</ul>';
   if (r.warns.length) h += '<ul class="why w">' + r.warns.map(function (w) { return '<li>' + esc(w) + '</li>'; }).join('') + '</ul>';
   if (r.sides) h += '<ul class="why" style="margin-top:6px"><li><b class="pos">خرید:</b> ' + esc(r.sides.long) + '</li><li><b class="neg">فروش:</b> ' + esc(r.sides.short) + '</li></ul>';
+  if (r.range && r.range.text) h += '<div class="banner" style="background:var(--raise);margin:8px 0 0"><b>رنج / حمایت و مقاومت:</b> ' + esc(r.range.text) + (r.range.leanWhy && r.range.leanWhy.length && r.range.state === 'inside' ? '<div class="sub">دلیل تمایل: ' + esc(r.range.leanWhy.join('، ')) + '</div>' : '') + '</div>';
+  if (r.shift) h += '<div class="banner warn" style="margin:8px 0 0">ساختار ۱ساعته ' + (r.shift.age + 1) + ' کندل پیش به سمت ' + (r.shift.dir === 'up' ? 'بالا' : 'پایین') + ' شکسته (CHoCH)؛ احتمال تغییر روند.</div>';
   if (r.bias) h += '<div class="sub" style="margin-top:6px">روند: ۴ساعته ' + dirFa(r.bias.h4) + (r.bias.h1 ? ' · ۱ساعته ' + dirFa(r.bias.h1) : '') + (r.btc ? ' · بیت‌کوین ' + dirFa(r.btc.dir) : '') + '</div>';
   h += '<details class="cht"' + (S.open === r.sym ? ' open' : '') + ' data-sym="' + esc(r.sym) + '"><summary>چارت</summary>' + chartSvg(r) + '</details>';
   return h + '</div></div>';
@@ -1366,12 +1572,87 @@ function runBT() {
   }
   next();
 }
+
+var FKEYS = ['htf', 'vol', 'daily', 'sess', 'vola', 'mss', 'ce', 'shock', 'ct', 'rng', 'reg'];
+function fl(o) { var f = {}; FKEYS.forEach(function (k) { f[k] = o && o[k] ? o[k] : 0; }); return f; }
+function ablList() {
+  var a = { daily: 1, mss: 1, ce: 1 }, c = { daily: 1, mss: 1, ce: 1, shock: 1, vol: 1, sess: 1, vola: 1 }, all = { htf: 1, vol: 1, daily: 1, sess: 1, vola: 1, mss: 1, ce: 1, shock: 1 };
+  var strict = JSON.parse(JSON.stringify(all)); strict.mss = 2; var ct = JSON.parse(JSON.stringify(all)); ct.ct = 1; ct.reg = 1; ct.rng = 1;
+  var reg = JSON.parse(JSON.stringify(all)); reg.reg = 1; var rng = JSON.parse(JSON.stringify(all)); rng.rng = 1; var both = JSON.parse(JSON.stringify(all)); both.reg = 1; both.rng = 1;
+  var cur = JSON.parse(JSON.stringify(st.cfg.f || {}));
+  var cur2 = [['تنظیمات فعلی خودت', cur, false], ['تنظیمات فعلی + فقط تا TP2', cur, true]];
+  return [['پایه (بدون هیچ فیلتر)', null], ['فقط سقف/کف دیروز', { daily: 1 }], ['دیروز + تأیید قوی', { daily: 1, mss: 1 }], ['دیروز + تأیید قوی + لیمیت ۵۰٪', a], ['بالایی + حجم/ساعت/نوسان + شوک', c], ['همه‌ی فیلترها (نسخه ۴.۱)', all], ['همه + تغییر روند ۱ساعته', reg], ['همه + رنج', rng], ['همه + تغییر روند + رنج', both], ['همه + تغییر روند + رنج + خلاف روند', ct], cur2[0], cur2[1]].map(function (x) { return { name: x[0], f: x[1] ? fl(x[1]) : null, tp2: !!x[2] }; });
+}
+function runAbl() {
+  var B = S.bt; if (B.run) return;
+  var coins = Object.keys(B.coins).filter(function (k) { return B.coins[k]; });
+  if (!coins.length) { B.err = 'حداقل یه ارز انتخاب کن.'; return render(); }
+  var tf = st.cfg.tf, per = 86400 / E.TF_SEC[tf], days = B.days, vars = ablList(), tr = vars.map(function () { return []; }), k = 0, t0 = Infinity, t1 = 0;
+  B.run = true; B.cancel = false; B.err = ''; B.prog = 'شروع…'; render();
+  function finish(msg) {
+    B.run = false;
+    if (msg) { B.err = msg; B.prog = ''; return render(); }
+    var split = t0 + (t1 - t0) * 2 / 3;
+    st.abl = { tf: tf, days: days, coins: coins, at: Date.now(), rows: vars.map(function (v, i) {
+      var all = E.btStats(tr[i]), late = E.btStats(tr[i].filter(function (t) { return t.t >= split; })), early = E.btStats(tr[i].filter(function (t) { return t.t < split; }));
+      return { name: v.name, f: v.f, tp2: !!v.tp2, n: all.n, win: all.win, avgR: all.avgR, pf: all.pf, dd: all.dd, lateN: late.n, lateAvg: late.avgR, earlyN: early.n, earlyAvg: early.avgR };
+    }) };
+    save(); B.prog = ''; render();
+  }
+  function runOne(d, vi, sym) {
+    return new Promise(function (resolve) {
+      var cfg = JSON.parse(JSON.stringify(st.cfg)); cfg.f = vars[vi].f; cfg.tp2 = !!vars[vi].tp2;
+      var S1 = E.btInit(d, tf, cfg, { sym: sym });
+      (function chunk() {
+        if (B.cancel) return resolve(null);
+        var done = E.btAdvance(S1, 300);
+        B.prog = sym + ' · ترکیب ' + (vi + 1) + ' از ' + vars.length + ' · ' + Math.round(S1.i / S1.total * 100) + '٪';
+        if (done) return resolve(S1);
+        render(); setTimeout(chunk, 0);
+      })();
+    });
+  }
+  function next() {
+    if (B.cancel) return finish('متوقف شد.');
+    if (k >= coins.length) return finish('');
+    var sym = coins[k++];
+    B.prog = sym + ': دریافت کندل‌ها…'; render();
+    Promise.all([histCandles(sym, tf, Math.round(days * per) + 140), tf === '1h' ? Promise.resolve([]) : histCandles(sym, '1h', days * 24 + 260), histCandles(sym, '4h', days * 6 + 150)]).then(function (r) {
+      var d = { ltf: r[0], h1: tf === '1h' ? r[0] : r[1], h4: r[2] };
+      t0 = Math.min(t0, d.ltf[120] ? d.ltf[120].t : d.ltf[0].t); t1 = Math.max(t1, d.ltf[d.ltf.length - 1].t);
+      var vi = 0;
+      function step() {
+        if (vi >= vars.length) return null;
+        var i = vi++;
+        return runOne(d, i, sym).then(function (S1) { if (!S1) return false; tr[i] = tr[i].concat(S1.trades); return step(); });
+      }
+      return step();
+    }).then(function (ok) { if (ok === false) return finish('متوقف شد.'); next(); }, function (e) { finish('دریافت داده برای ' + sym + ' نشد: ' + friendlyErr(e) + ' (VPN رو چک کن).'); });
+  }
+  next();
+}
+function ablCard() {
+  var A = st.abl; if (!A || !A.rows) return '';
+  var pct = function (x) { return Math.round(x * 100) + '٪'; };
+  var h = '<div class="card stack"><h2>مقایسه‌ی خودکار ترکیب فیلترها</h2><div class="sub">' + A.coins.join('، ') + ' · ' + A.days + ' روز · ' + A.tf + ' · ' + dayName(A.at) + ' ' + hhmm(A.at) + '. «ثلث آخر» یعنی ۱/۳ آخر بازه که جدا حساب شده؛ اگه یه ترکیب فقط تو اول بازه خوب بوده، احتمالاً شانسیه.</div>';
+  h += '<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12.5px" class="bt"><tr><th>ترکیب</th><th>معامله</th><th>برد</th><th>میانگین R</th><th>PF</th><th>ثلث آخر</th><th></th></tr>';
+  var best = -1, bv = -1e9;
+  A.rows.forEach(function (r, i) { if (r.n >= 30 && r.avgR > 0 && r.lateN >= 8 && r.lateAvg > 0 && r.avgR > bv) { bv = r.avgR; best = i; } });
+  A.rows.forEach(function (r, i) {
+    h += '<tr' + (i === best ? ' style="font-weight:700"' : '') + '><td>' + esc(r.name) + (i === best ? ' ★' : '') + '</td><td class="n">' + r.n + '</td><td class="n">' + pct(r.win) + '</td><td class="n ' + (r.avgR > 0 ? 'pos' : 'neg') + '">' + sgn(r.avgR) + '</td><td class="n">' + N(r.pf, 2) + '</td><td class="n ' + (r.lateAvg > 0 ? 'pos' : 'neg') + '">' + (r.lateN ? sgn(r.lateAvg) + ' (' + r.lateN + ')' : '–') + '</td><td>' + (r.f ? '<button class="btn small" data-act="ablapply" data-i="' + i + '">اعمال</button>' : '') + '</td></tr>';
+  });
+  h += '</table></div><ul class="why">';
+  if (best >= 0) h += '<li>بهترین ترکیبی که هم کل بازه و هم ثلث آخر مثبت بود: «' + esc(A.rows[best].name) + '». روی «اعمال» بزن و بعد چند روز بدون پول واقعی (یا با حجم خیلی کم) امتحانش کن.</li>';
+  else h += '<li>هیچ ترکیبی هم تو کل بازه، هم تو ثلث آخر، با حداقل ۳۰ معامله مثبت نبود. یعنی روی این داده لبه‌ی قابل‌اعتمادی پیدا نشد. با پول واقعی نیا؛ ارزها/بازه‌ی بیشتر رو امتحان کن.</li>';
+  h += '<li>میانگین R مثبت یعنی بعد از کارمزد در هر معامله به‌طور میانگین سود می‌ده. نرخ برد به‌تنهایی مهم نیست: با ریوارد ۱.۵ تا ۳ برابر، حتی ۴۰٪ برد هم می‌تونه سودده باشه.</li></ul></div>';
+  return h;
+}
 function btRow(n, a, b) { return '<tr><td>' + n + '</td><td class="n">' + a + '</td><td class="n">' + b + '</td></tr>'; }
 function btCard() {
   var B = S.bt, h = '<div class="card stack"><h2>بک‌تست استراتژی (روی کندل‌های گذشته‌ی Binance)</h2><div class="sub">استراتژی رو روی چند هفته‌ی گذشته اجرا می‌کنه و نتیجه‌ی «نسخه‌ی پایه» رو با «نسخه‌ی فعلی (با فیلترهای تنظیمات)» مقایسه می‌کنه. برحسب R (۱R = فاصله‌ی ورود تا حد ضرر)، با کارمزد و کمی اسلیپیج، و مدیریت معامله مثل خود اپ (۴۰/۳۵/۲۵ و ریسک‌فری بعد TP1).</div>';
   h += '<div class="row" style="flex-wrap:wrap;gap:6px">' + st.cfg.watch.map(function (c) { return '<button class="btn small' + (B.coins[c] ? ' main' : '') + '" data-act="btcoin" data-c="' + esc(c) + '">' + esc(c) + '</button>'; }).join('') + '</div>';
   h += '<div class="seg">' + [14, 30, 60].map(function (d) { return '<button class="' + (B.days === d ? 'on' : '') + '" data-act="btdays" data-d="' + d + '">' + d + ' روز</button>'; }).join('') + '</div>';
-  h += B.run ? '<div class="banner warn"><span class="spin"></span>' + esc(B.prog) + '</div><button class="btn" data-act="btstop">توقف</button>' : '<button class="btn main" data-act="btrun">اجرای بک‌تست (' + st.cfg.tf + ')</button>';
+  h += B.run ? '<div class="banner warn"><span class="spin"></span>' + esc(B.prog) + '</div><button class="btn" data-act="btstop">توقف</button>' : '<button class="btn main" data-act="btrun">اجرای بک‌تست (' + st.cfg.tf + ')</button><button class="btn" data-act="btabl">مقایسه‌ی خودکار همه‌ی ترکیب‌های فیلتر (کندتر؛ چند دقیقه)</button>';
   if (B.err) h += '<div class="banner warn">' + esc(B.err) + '</div>';
   var R = B.res || (B.run ? null : st.bt);
   if (R && R.A && R.B) {
@@ -1391,11 +1672,12 @@ function btCard() {
     v.push('این بک‌تست خبر و بیت‌کوین رو لحاظ نمی‌کنه و اگه توی یه کندل هم حد ضرر هم هدف لمس بشه، حد ضرر رو فرض می‌کنه (محافظه‌کارانه).');
     h += '<ul class="why">' + v.map(function (t) { return '<li>' + esc(t) + '</li>'; }).join('') + '</ul>';
   }
-  return h + '</div>';
+  return h + '</div>' + ablCard();
 }
 function flagsCard() {
-  var f = st.cfg.f || {}, L = [['htf', 'هم‌پوشانی با FVG تایم‌فریم بالاتر'], ['vol', 'حجم کندل اصلی ستاپ'], ['daily', 'سقف/کف دیروز'], ['sess', 'ساعت لندن/نیویورک و آخر هفته'], ['vola', 'نوسان و ضد دنبال‌کردن حرکت تند'], ['mss', 'شکست ساختار کوچیک (تأیید قوی‌تر)'], ['ce', 'ورود لیمیت روی ۵۰٪ FVG']];
+  var f = st.cfg.f || {}, L = [['htf', 'هم‌پوشانی با FVG تایم‌فریم بالاتر'], ['vol', 'حجم کندل اصلی ستاپ'], ['daily', 'سقف/کف دیروز'], ['sess', 'ساعت لندن/نیویورک و آخر هفته'], ['vola', 'نوسان و ضد دنبال‌کردن حرکت تند'], ['mss', 'شکست ساختار کوچیک (تأیید قوی‌تر)'], ['ce', 'ورود لیمیت روی ۵۰٪ FVG'], ['shock', 'شوک حجم/رنج اخیر (جلوگیری از معامله خلاف پامپ/دامپ)'], ['reg', 'تشخیص تغییر روند ۱ساعته (CHoCH): ورود هم‌جهت روند قدیمی رو می‌بنده و اجازه‌ی معامله به جهت روند جدید می‌ده'], ['rng', 'تشخیص رنج، حمایت/مقاومت: شکست + ریتست و شکار لبه‌ی رنج'], ['ct', 'اجازه‌ی معامله‌ی خلاف روند (فقط ستاپ کامل، ته/سقف رنج؛ ریسک بالاتر)']];
   return '<div class="card stack"><h2>فیلترهای تقویت استراتژی</h2><div class="sub">هر کدوم رو می‌تونی روشن/خاموش کنی و با بک‌تست اثرش رو ببینی.</div>' + L.map(function (x) { return '<label class="switch"><input type="checkbox" data-set="f_' + x[0] + '"' + (f[x[0]] ? ' checked' : '') + '><span>' + x[1] + '</span></label>'; }).join('') +
+    '<label class="switch"><input type="checkbox" data-set="tp2"' + (st.cfg.tp2 ? ' checked' : '') + '><span>فقط تا TP2 (هدف سوم حذف می‌شه؛ ۵۰٪ در TP1 و ۵۰٪ در TP2؛ وین‌ریت بالاتر ولی ریوارد کمتر)</span></label>' +
     '<label class="switch"><input type="checkbox" data-set="f_mssStrict"' + (f.mss === 2 ? ' checked' : '') + '><span>شکست ساختار کوچیک اجباری باشه (سخت‌گیرانه؛ سیگنال کمتر)</span></label></div>';
 }
 
@@ -1528,7 +1810,7 @@ function tabGuide() {
     sec('قدم ۴: حد ضرر و حد سود', '<ul class="why"><li>حد ضرر «مطمئن» گذاشته می‌شه: پشت ناحیه FVG (۰.۳۵ ATR) و پشت کف/سقف سه کندل اخیر (۰.۳ ATR)، هرکدوم دورتره. فاصله‌ش روی ۵ و ۱۵ دقیقه حداقل ۱.۵ برابر ATR و ۰.۶٪ قیمته (روی تایم‌فریم‌های بالاتر ۱.۲ ATR و ۰.۵٪) و حداکثر ۴.۵ برابر ATR یا ۳٪ قیمت؛ تا با نویز معمولی نخوره. استاپ دورتر یعنی حجم رو خودت کمتر بگیر.</li><li>سه هدف داریم: TP1 روی ۱.۵ برابر ریسک (۴۰٪ ببند و حد ضرر رو بیار روی ورود)، TP2 روی نزدیک‌ترین سقف/کف مهم (حداقل ۲.۲ برابر ریسک) یا ۲.۶ برابر (۳۵٪ ببند) و TP3 هدف دورتر (۲۵٪ باقی‌مونده). اگه فقط دو هدف منطقی بود، ۵۰٪/۵۰٪.</li><li>ستاپی که بعد از کارمزد ریسک به ریوارد خالصش کمتر از ۲ بشه یا کارمزد بیشتر از ۲۰٪ ریسک باشه رد می‌شه. وقتی روند بالاتر مشخص نیست، فقط ستاپ کامل (FVG و شکار نقدینگی با هم) قبول می‌شه، و خلاف روند هیچ‌وقت.</li></ul>') +
     sec('امتیاز', '<p style="margin:0">از ۱۰۰: هم‌جهتی با روند (تا ۳۰)، کیفیت ناحیه (تا ۲۵)، تأیید (تا ۱۵)، ریسک به ریوارد (تا ۱۵)، قیمت ارزان در خرید و گران در فروش نسبت به رنج اخیر (۱۰) و نبودن خبر مهم نزدیک (۵). الان حداقل امتیاز <b class="n">' + c.minScore + '</b> هست و از تنظیمات عوض می‌شه. بالاتر یعنی انتخابی‌تر و ستاپ کمتر.</p>') +
     sec('ریسک و حجم', '<ul class="why"><li>اپ حجم، لورج و مبلغ ریسک رو محاسبه یا کنترل نمی‌کنه؛ اینا مسئولیت خودته (مثلاً حداکثر ۰.۵٪ سرمایه ضرر توی هر معامله و توقف روزانه).</li><li>همه‌چیز برحسب R و درصد فاصله‌ی قیمت نشون داده می‌شه. ۱R یعنی فاصله‌ی ورود تا حد ضرر.</li><li>ژورنال و ثبت معاملات دست‌نخورده‌ست و نتیجه‌ی بستن معاملات رو با ریسک مرجع تنظیمات به دلار تبدیل می‌کنه.</li></ul>') +
-    sec('فیلترهای تقویت‌شده (نسخه ۴)', '<ul class="why"><li><b>ناحیه‌ی تایم‌فریم بالاتر:</b> ورود داخل FVG ۱ساعته/۴ساعته امتیاز می‌گیره؛ ناحیه‌ی خلاف‌جهت نزدیک هدف امتیاز کم می‌کنه.</li><li><b>حجم:</b> کندل اصلی ستاپ باید حجمش از میانگین بیشتر باشه؛ حجم کم یعنی ستاپ ضعیف.</li><li><b>سقف/کف دیروز:</b> هم هدف حساب می‌شن، هم شکارشون ستاپ معتبره.</li><li><b>ساعت بازار:</b> وسط لندن/نیویورک بهتره؛ آخر هفته و ساعت خلوت امتیاز کم می‌کنه.</li><li><b>نوسان:</b> نوسان فشرده امتیاز کم می‌کنه و بعد از حرکت تند، دنبال قیمت نمی‌ره.</li><li><b>شکست ساختار کوچیک:</b> تأیید قوی‌تر قبل از ورود (می‌تونی اجباری‌ش کنی).</li><li><b>ورود لیمیت:</b> روی ۵۰٪ ناحیه‌ی FVG، نه لبه‌ش؛ ورود بهتر و ریسک به ریوارد بالاتر، ولی گاهی پر نمی‌شه.</li><li>همه رو از تنظیمات خاموش/روشن می‌کنی و با «بک‌تست» توی تب بررسی اثرشون رو می‌بینی.</li></ul>') +
+    sec('فیلترهای تقویت‌شده (نسخه ۴.۲)', '<ul class="why"><li><b>ناحیه‌ی تایم‌فریم بالاتر:</b> ورود داخل FVG ۱ساعته/۴ساعته امتیاز می‌گیره؛ ناحیه‌ی خلاف‌جهت نزدیک هدف امتیاز کم می‌کنه.</li><li><b>حجم:</b> کندل اصلی ستاپ باید حجمش از میانگین بیشتر باشه؛ حجم کم یعنی ستاپ ضعیف.</li><li><b>سقف/کف دیروز:</b> هم هدف حساب می‌شن، هم شکارشون ستاپ معتبره.</li><li><b>ساعت بازار:</b> وسط لندن/نیویورک بهتره؛ آخر هفته و ساعت خلوت امتیاز کم می‌کنه.</li><li><b>نوسان:</b> نوسان فشرده امتیاز کم می‌کنه و بعد از حرکت تند، دنبال قیمت نمی‌ره.</li><li><b>شکست ساختار کوچیک:</b> تأیید قوی‌تر قبل از ورود (می‌تونی اجباری‌ش کنی).</li><li><b>ورود لیمیت:</b> روی ۵۰٪ ناحیه‌ی FVG، نه لبه‌ش؛ ورود بهتر و ریسک به ریوارد بالاتر، ولی گاهی پر نمی‌شه.</li><li><b>تغییر روند ۱ساعته (CHoCH):</b> اگه کلوز ۱ساعته‌ها توی ۸ کندل اخیر آخرین سقف/کف مهم رو خلاف روند ۴ساعته شکسته باشن، ورود هم‌جهت روند قدیمی بسته می‌شه (همون جایی که قبلاً استاپ می‌خوردی). اگه ۱ساعته به سمت معامله عوض شده باشه، معامله‌ی خلاف روند ۴ساعته با شرط‌های سخت مجاز می‌شه.</li><li><b>رنج و حمایت/مقاومت:</b> اپ رنج رو (حداقل ۲ برخورد به کف و ۲ به سقف) پیدا می‌کنه و کادرش رو توی کارت نشون می‌ده، با «تمایل» به بالا/پایین از روی روند، شیب کف و سقف، حجم و جای قیمت. این فقط تمایله، پیش‌بینی نیست. سیگنال فقط با «شکست قوی + ریتست + کندل تأیید» یا «شکار لبه‌ی رنج و برگشت» صادر می‌شه.</li><li><b>شوک حجم (نسخه ۴.۱):</b> اگه توی ۱۶ کندل اخیر یه کندل با حجم و رنج غیرعادی (پامپ/دامپ) بوده، سیگنال خلافش تا ۹ کندل صادر نمی‌شه و بعدش جریمه می‌گیره؛ هم‌جهتش اوکیه. این فقط از ورودهای جدید بعد از شوک جلوگیری می‌کنه، نه از شوکی که بعد از ورود می‌آد؛ برای اون اپ توی مدیریت معامله هشدار می‌ده.</li><li><b>معامله‌ی خلاف روند (پیش‌فرض خاموش):</b> فقط ستاپ کامل (FVG + شکار نقدینگی + شکست ساختار کوچیک + کندل تأیید) وقتی قیمت ته یا سقف رنج اخیره، بدون ورود لیمیت و با حداکثر ریوارد ۱ به ۳. خیلی کم پیش می‌آد و ریسکش بالاتره؛ اول با بک‌تست امتحانش کن.</li><li>توی تب «بررسی»، دکمه‌ی «مقایسه‌ی خودکار» همه‌ی ترکیب‌ها رو با هم تست می‌کنه و بهترین رو بهت نشون می‌ده.</li><li>همه رو از تنظیمات خاموش/روشن می‌کنی و با «بک‌تست» توی تب بررسی اثرشون رو می‌بینی.</li></ul>') +
     sec('سفارش لیمیت', '<ul class="why"><li>وقتی قیمت هنوز به ناحیه‌ی FVG نرسیده، کارت «خرید/فروش با لیمیت» می‌شه و ورود روی لبه‌ی ناحیه‌ست.</li><li>«سفارش لیمیت گذاشتم» رو بزن؛ اپ سفارش رو دنبال می‌کنه و می‌گه کِی پر شده، کِی ستاپ باطل شده (شکستن ناحیه، رسیدن به TP1 بدون پر شدن، خبر، کهنه شدن بعد ۱۶ کندل) و کِی کنسل کنی.</li><li>تا وقتی پر نشه، ضرر یا سودی حساب نمی‌شه.</li></ul>') +
     sec('بررسی سیگنال خودت', '<ul class="why"><li>توی تب «بررسی»، متن هر سیگنال رو بچسبون تا اپ با روند، حد ضرر نسبت به ATR، ریسک به ریوارد بعد کارمزد، بیت‌کوین و خبر بسنجه و حجم رو با ریسک ۰.۵٪ حساب کنه.</li><li>عکس رو اپ نمی‌خونه؛ عکس رو توی چت Claude بفرست.</li></ul>') +
     sec('بعد از ورود چی؟', '<ul class="why"><li>دکمه‌ی «وارد شدم» رو بزن؛ معامله توی تب معاملات می‌مونه و سود و ضرر لحظه‌ای‌ش از قیمت Binance پرپچوال حساب می‌شه.</li><li>اپ هر ۳۰ ثانیه قیمت و هر ۲ دقیقه روند، ناحیه ورود، خبر و ستاپ مخالف رو دوباره چک می‌کنه و با دلیل می‌گه: نگه دار، حد ضرر رو ریسک‌فری کن، قسمتی رو ببند یا کامل ببند.</li><li>اپ خودش چیزی نمی‌بنده. هر کاری توی صرافی کردی، دکمه‌ش رو هم اینجا بزن.</li></ul>') +
@@ -1543,7 +1825,7 @@ function view() {
   return header() + '<div class="wrap">' + (S.tab === 'settings' ? banners() : '') + body + '</div>' + tabsBar();
 }
 
-if (!HAS_DOM) { module.exports = { runBT: runBT, btCard: btCard, flagsCard: flagsCard, histCandles: histCandles, applySet: applySet, runCheckForm: runCheckForm, S: S, parseSignal: parseSignal, checkSignal: checkSignal, pendingAdvice: pendingAdvice, pendCard: pendCard, tabCheck: tabCheck, runCheck: runCheck, enterFromCheck: enterFromCheck, sizeFor: sizeFor, enterPos: enterPos, closePart: closePart, finishIfDone: finishIfDone, pnlNow: pnlNow, adviseFor: adviseFor, sessInfo: sessInfo, SESS: SESS, posCard: posCard, tabTrades: tabTrades, perpMap: perpMap, livePrice: livePrice, view: view, card: card, tabSignals: tabSignals, tabJournal: tabJournal, tabNews: tabNews, tabSettings: tabSettings, tabGuide: tabGuide, analyzeSym: analyzeSym, runList: runList, refreshLive: refreshLive, S: S, st: st, chartSvg: chartSvg, candles: candles }; return; }
+if (!HAS_DOM) { module.exports = { runAbl: runAbl, ablCard: ablCard, runBT: runBT, btCard: btCard, flagsCard: flagsCard, histCandles: histCandles, applySet: applySet, runCheckForm: runCheckForm, S: S, parseSignal: parseSignal, checkSignal: checkSignal, pendingAdvice: pendingAdvice, pendCard: pendCard, tabCheck: tabCheck, runCheck: runCheck, enterFromCheck: enterFromCheck, sizeFor: sizeFor, enterPos: enterPos, closePart: closePart, finishIfDone: finishIfDone, pnlNow: pnlNow, adviseFor: adviseFor, sessInfo: sessInfo, SESS: SESS, posCard: posCard, tabTrades: tabTrades, perpMap: perpMap, livePrice: livePrice, view: view, card: card, tabSignals: tabSignals, tabJournal: tabJournal, tabNews: tabNews, tabSettings: tabSettings, tabGuide: tabGuide, analyzeSym: analyzeSym, runList: runList, refreshLive: refreshLive, S: S, st: st, chartSvg: chartSvg, candles: candles }; return; }
 
 /* ---------- DOM wiring ---------- */
 function render() {
@@ -1573,7 +1855,7 @@ function posAct(act, id) {
 function applySet(key, raw) {
   var c = st.cfg;
   if (key === 'watch') { var w = String(raw).split(/[,،\s]+/).map(baseOf).filter(Boolean); if (w.length) c.watch = w.filter(function (x, i) { return w.indexOf(x) === i; }).slice(0, 24); }
-  else if (key === 'auto' || key === 'scanOnOpen') c[key] = !!raw;
+  else if (key === 'auto' || key === 'scanOnOpen' || key === 'tp2') c[key] = !!raw;
   else if (key === 'f_mssStrict') { c.f = c.f || {}; c.f.mss = raw ? 2 : 1; }
   else if (key.indexOf('f_') === 0) { c.f = c.f || {}; c.f[key.slice(2)] = raw ? (key === 'f_mss' ? 1 : 1) : 0; }
   else if (key === 'balNow') { var x = num(raw); if (isFinite(x) && x >= 0) c.balance0 = x - sumPnl(st.trades); }
@@ -1602,6 +1884,8 @@ document.addEventListener('click', function (e) {
   else if (act === 'btcoin') { var cc = b.getAttribute('data-c'); S.bt.coins[cc] = !S.bt.coins[cc]; render(); }
   else if (act === 'btdays') { S.bt.days = +b.getAttribute('data-d'); render(); }
   else if (act === 'btrun') { runBT(); }
+  else if (act === 'btabl') { runAbl(); }
+  else if (act === 'ablapply') { var rw = st.abl && st.abl.rows[+b.getAttribute('data-i')]; if (rw && rw.f) { st.cfg.f = JSON.parse(JSON.stringify(rw.f)); st.cfg.tp2 = !!rw.tp2; save(); render(); } }
   else if (act === 'btstop') { S.bt.cancel = true; }
   else if (act === 'chk') { var ta = document.getElementById('chk_text'); if (ta) S.chkText = ta.value; runCheck(); }
   else if (act === 'chkenter' || act === 'chkpend') { var cp = enterFromCheck(act === 'chkpend'); S.posMsg = cp ? (cp.status === 'pending' ? 'سفارش لیمیت ' + cp.sym + ' ثبت شد و پیگیری می‌شه.' : 'معامله ' + cp.sym + ' ثبت شد.') : 'ثبت نشد (قبلاً ثبت شده، بودجه‌ی ریسک تموم شده یا سیگنال معتبر نیست).'; if (cp) { S.tab = 'journal'; monitorPos().then(render); } render(); window.scrollTo(0, 0); }

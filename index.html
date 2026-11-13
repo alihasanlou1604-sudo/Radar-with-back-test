@@ -124,6 +124,16 @@ svg.chart { width: 100%; height: auto; display: block; direction: ltr; backgroun
 .cu { stroke: var(--buy); fill: var(--buy); } .cd { stroke: var(--sell); fill: var(--sell); }
 .zone { fill: var(--accent); opacity: .16; }
 .lt { font-size: 9px; font-family: var(--font); }
+.sec { border-top: 1px solid var(--line); padding: 12px 0 4px; margin-top: 12px; }
+.sec-h { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.sec-t { font-size: 15.5px; font-weight: 800; }
+.sec-fvg { border: 1.5px solid var(--accent); border-radius: 12px; padding: 12px 12px 6px; background: var(--surface); }
+.sec-fvg .sec-t { color: var(--accent); }
+.sec-sweep .sec-t { color: #ff9f43; }
+.fvginfo { background: var(--raise); border-radius: 10px; padding: 8px 10px; font-size: 13px; margin: 8px 0; }
+.fvginfo b { font-weight: 800; }
+.chip { display: inline-block; border-radius: 6px; padding: 0 7px; font-size: 12px; font-weight: 700; }
+.chip.bull { background: var(--buy-bg); color: var(--buy); } .chip.bear { background: var(--sell-bg); color: var(--sell); }
 
 .stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
 .stat { background: var(--bg); border-radius: 10px; padding: 8px 10px; }
@@ -428,8 +438,8 @@ function detectRange(cl, ref, htfDir) {
     else if (m >= 1) {
       for (i = Math.max(end + 1, n - 2); i < n; i++) {
         var q = cl[i];
-        if (q.l < rg.lo - 0.05 * ref && q.c > rg.lo) { X.state = 'sweep'; X.dir = 'up'; X.level = rg.lo; X.ext = X.ext == null ? q.l : Math.min(X.ext, q.l); }
-        else if (q.h > rg.hi + 0.05 * ref && q.c < rg.hi) { X.state = 'sweep'; X.dir = 'down'; X.level = rg.hi; X.ext = X.ext == null ? q.h : Math.max(X.ext, q.h); }
+        if (q.l < rg.lo - 0.05 * ref && q.c > rg.lo) { X.state = 'sweep'; X.dir = 'up'; X.level = rg.lo; X.ki = i; X.ext = X.ext == null ? q.l : Math.min(X.ext, q.l); }
+        else if (q.h > rg.hi + 0.05 * ref && q.c < rg.hi) { X.state = 'sweep'; X.dir = 'down'; X.level = rg.hi; X.ki = i; X.ext = X.ext == null ? q.h : Math.max(X.ext, q.h); }
       }
     }
     return X;
@@ -474,6 +484,7 @@ function evalRange(ctx, side) {
     tpFinal = s > 0 ? rg.hi - 0.2 * ref : rg.lo + 0.2 * ref;
     setupQ = 18 + Math.min(4, Math.max(0, rg.tH + rg.tL - 4));
     R.setup = 'شکار لبه‌ی رنج';
+    R.swRef = { level: X.level, extreme: X.ext, k: X.ki != null ? X.ki : n - 1, si: rg.from, daily: false, dir: s > 0 ? 'bull' : 'bear', range: true };
     R.reasons.push((s > 0 ? 'کف' : 'سقف') + ' رنج (' + (s > 0 ? rg.tL : rg.tH) + ' برخورد) شکار شد و قیمت برگشت داخل رنج');
     if (X.lean.dir === want) { bonus += 3; R.reasons.push('نشانه‌های داخل رنج هم همین سمت رو تأیید می‌کنه'); }
   }
@@ -678,7 +689,7 @@ function levelsBeyond(entry, s, sw, from) {
   return out;
 }
 
-function evalSide(ctx, side) {
+function evalSide(ctx, side, mode) {
   var s = side === 'long' ? 1 : -1;
   var cl = ctx.cl, n = cl.length, a = ctx.atr, price = ctx.price;
   var R = { side: side, veto: null, why: [], reasons: [], warns: [], score: 0 };
@@ -715,8 +726,8 @@ function evalSide(ctx, side) {
       var S = arr[j];
       if (S.i > k - 3) continue;
       var c = cl[k];
-      if (s > 0 && c.l < S.p && c.c > S.p) { sweep = { level: S.p, extreme: c.l, k: k }; break; }
-      if (s < 0 && c.h > S.p && c.c < S.p) { sweep = { level: S.p, extreme: c.h, k: k }; break; }
+      if (s > 0 && c.l < S.p && c.c > S.p) { sweep = { level: S.p, extreme: c.l, k: k, si: S.i }; break; }
+      if (s < 0 && c.h > S.p && c.c < S.p) { sweep = { level: S.p, extreme: c.h, k: k, si: S.i }; break; }
     }
     if (sweep) break;
   }
@@ -728,9 +739,14 @@ function evalSide(ctx, side) {
       if (s < 0 && cc.h > lvl && cc.c < lvl) sweep = { level: lvl, extreme: cc.h, k: kk, daily: true };
     }
   }
+  if (mode === 'sweep') fvg = null;
+  if (fvg) R.fvgRef = { dir: fvg.dir, lo: fvg.lo, hi: fvg.hi, i0: fvg.mid - 1, mid: fvg.mid, i1: fvg.end, filled: fvg.filled, disp: fvg.disp, age: n - 1 - fvg.end, t0: cl[fvg.mid - 1].t, touched: fvgTouched };
+  if (sweep) R.swRef = { level: sweep.level, extreme: sweep.extreme, k: sweep.k, si: sweep.si, daily: !!sweep.daily, dir: s > 0 ? 'bull' : 'bear' };
+  if (mode === 'fvg' && !fvg) { R.veto = 'FVG فعال و تازه‌ای نزدیک قیمت نیست'; return R; }
+  if (mode === 'sweep' && !sweep) { R.veto = 'جمع‌کردن نقدینگی (شکار سقف/کف قبلی و برگشت) دیده نمی‌شه'; return R; }
   if (!fvg && !sweep) { R.veto = 'FVG فعال نزدیک قیمت یا جمع‌کردن نقدینگی دیده نمی‌شه'; return R; }
   if (counter) {
-    if (!(fvg && sweep)) { R.veto = 'خلاف روند فقط با ستاپ کامل (FVG + شکار نقدینگی) قابل قبوله'; return R; }
+    if (!(fvg && sweep)) { R.veto = mode === 'sweep' ? 'خلاف روند: جمع‌کردن نقدینگی به‌تنهایی کافی نیست؛ فقط ستاپ هم‌پوشان FVG + شکار (بخش FVG) قبوله' : 'خلاف روند فقط با ستاپ کامل (FVG + شکار نقدینگی) قابل قبوله'; return R; }
     var spn = Math.max(ctx.rangeHi - ctx.rangeLo, 1e-12), fr = (price - ctx.rangeLo) / spn, lm = counterReg ? 0.5 : (ctx.htf.strong ? 0.25 : 0.35);
     if (s > 0 ? fr > lm : fr < 1 - lm) { R.veto = 'خلاف روند فقط وقتی قیمت ته (برای خرید) یا سقف (برای فروش) رنج اخیر باشه'; return R; }
   }
@@ -754,11 +770,11 @@ function evalSide(ctx, side) {
   }
   if (F.vola && ctx.a100 && a < 0.7 * ctx.a100) { pre += 6; R.warns.push('نوسان فشرده‌ست (کمتر از ۷۰٪ میانگین اخیر)؛ شکست‌های فیک زیاده'); }
 
-  if (ctx.htf.dir === 'flat' && !(fvg && sweep)) { R.veto = 'روند بالاتر مشخص نیست؛ فقط ستاپ کامل (FVG + شکار نقدینگی) قابل قبوله'; return R; }
+  if (ctx.htf.dir === 'flat' && !(fvg && sweep)) { R.veto = mode === 'sweep' ? 'روند بالاتر مشخص نیست؛ جمع‌کردن نقدینگی به‌تنهایی کافی نیست (ستاپ هم‌پوشان FVG + شکار توی بخش FVG بررسی می‌شه)' : 'روند بالاتر مشخص نیست؛ فقط ستاپ کامل (FVG + شکار نقدینگی) قابل قبوله'; return R; }
   var setupQ = 0, entry = price, stop, limit = false, zone = null;
   if (fvg) {
     setupQ = 15 + Math.min(10, fvg.disp * 5) - (fvg.filled > 0.5 ? 4 : 0);
-    zone = { lo: fvg.lo, hi: fvg.hi, dir: fvg.dir };
+    zone = { lo: fvg.lo, hi: fvg.hi, dir: fvg.dir, i0: fvg.mid - 1, mid: fvg.mid, i1: fvg.end, filled: fvg.filled, age: n - 1 - fvg.end, t0: cl[fvg.mid - 1].t };
     var inZone = price >= fvg.lo && price <= fvg.hi;
     if (!inZone && !fvgTouched) { entry = F.ce ? (fvg.lo + fvg.hi) / 2 : (s > 0 ? fvg.hi : fvg.lo); limit = true; if (F.ce) R.reasons.push('ورود لیمیت روی ۵۰٪ ناحیه‌ی FVG'); }
     var zs = s > 0 ? fvg.lo - 0.35 * a : fvg.hi + 0.35 * a;
@@ -864,7 +880,7 @@ function evalSide(ctx, side) {
   R.score = Math.max(0, Math.round(align + setupQ + confirmPts + rrPts + pd + newsPts + bonus - penalty));
   R.entry = entry; R.stop = stop; R.tp = tp; R.rr = tpR; R.netRR = netRR; R.tps = tps; R.expR = expR;
   R.limit = limit; R.zone = zone; R.sweep = sweep; R.counter = counter;
-  R.setup = fvg && sweep ? 'FVG + شکار نقدینگی' : (fvg ? 'بازگشت به FVG' : 'شکار نقدینگی');
+  R.setup = mode === 'sweep' ? 'جمع‌کردن نقدینگی' : (fvg && sweep ? 'بازگشت به FVG + شکار نقدینگی هم‌پوشان' : (fvg ? 'بازگشت به FVG' : 'جمع‌کردن نقدینگی'));
   return R;
 }
 
@@ -922,70 +938,114 @@ function analyze(p) {
   out.closeT = (isFinite(lastT) && stepMs && lastT > 1e11) ? lastT + stepMs : null; out.nextCloseT = out.closeT ? out.closeT + stepMs : null;
   out.stale = !!(out.closeT && (now - out.closeT) > 2 * stepMs);
   out.bias = { h4: b4.dir, h1: b1 ? b1.dir : null, dir: htf.dir, strong: htf.strong, conflict: !!htf.conflict, why4: b4.why };
-  var L = evalSide(ctx, 'long'), S = evalSide(ctx, 'short');
+  var minScore = cfg.minScore || 70;
+  out.view = { candles: ltf.slice(-70), offset: Math.max(0, ltf.length - 70) };
+  /* دو استراتژی جدا: بازگشت به FVG و جمع‌کردن نقدینگی (+ شکست رنج به‌عنوان بخش سوم، فقط وقتی سیگنال دارد) */
+  var LF = evalSide(ctx, 'long', 'fvg'), SF = evalSide(ctx, 'short', 'fvg');
+  var LS = evalSide(ctx, 'long', 'sweep'), SS = evalSide(ctx, 'short', 'sweep');
+  var RBL = null, RBS = null;
   if (ctx.rgx && ctx.rgx.state !== 'inside') {
     var RL = evalRange(ctx, 'long'), RS = evalRange(ctx, 'short');
     out.rangeEval = { long: RL.veto || ('امتیاز ' + RL.score), short: RS.veto || ('امتیاز ' + RS.score) };
-    if (!RL.veto && (L.veto || RL.score > L.score)) L = RL; else if (L.veto && RL.veto && ctx.rgx.dir === 'up') L.veto = RL.veto;
-    if (!RS.veto && (S.veto || RS.score > S.score)) S = RS; else if (S.veto && RS.veto && ctx.rgx.dir === 'down') S.veto = RS.veto;
+    if (ctx.rgx.state === 'sweep') {
+      if (!RL.veto && (LS.veto || RL.score > LS.score)) LS = RL; else if (LS.veto && RL.veto && ctx.rgx.dir === 'up') LS.veto = RL.veto;
+      if (!RS.veto && (SS.veto || RS.score > SS.score)) SS = RS; else if (SS.veto && RS.veto && ctx.rgx.dir === 'down') SS.veto = RS.veto;
+    } else { RBL = RL; RBS = RS; }
   }
-  var cands = [L, S].filter(function (x) { return !x.veto; });
-  cands.sort(function (x, y) { return y.score - x.score; });
-  var best = cands[0];
-  var minScore = cfg.minScore || 70;
-  out.view = { candles: ltf.slice(-70), offset: Math.max(0, ltf.length - 70) };
-  (function () {
-    var off = out.view.offset, nC = cl.length, ov = [], vi = function (i) { return Math.max(0, i - off); }, near = 0.3 * a, k, q;
-    var pdv = prevDay(cl);
-    if (ctx.rgx && out.range) { var R0 = ctx.rgx.rg; ov.push({ k: 'range', hi: R0.hi, lo: R0.lo, x0: vi(R0.from), lean: ctx.rgx.lean.dir, state: ctx.rgx.state }); }
-    var zs = ctx.fvgs.filter(function (f) { return !f.dead && f.filled < 0.9 && f.end >= nC - 70 && !(best && best.zone && Math.abs(best.zone.lo - f.lo) < 1e-12 && Math.abs(best.zone.hi - f.hi) < 1e-12); });
-    zs.sort(function (x, y) { return Math.abs((x.lo + x.hi) / 2 - price) - Math.abs((y.lo + y.hi) / 2 - price); });
-    zs.slice(0, 3).forEach(function (f) { ov.push({ k: 'fvg', dir: f.dir, lo: f.lo, hi: f.hi, x0: vi(f.mid - 1) }); });
-    var pts = [], bestRes = null, bestSup = null;
-    ctx.sw.hi.concat(ctx.sw.lo).forEach(function (x) { if (x.i >= nC - 150) pts.push(x.p); });
-    pts.forEach(function (pv) {
-      var cnt = 0; for (q = 0; q < pts.length; q++) if (Math.abs(pts[q] - pv) <= 0.35 * a) cnt++;
-      if (cnt < 2) return;
-      if (ctx.rgx && (Math.abs(pv - ctx.rgx.rg.hi) < 0.5 * a || Math.abs(pv - ctx.rgx.rg.lo) < 0.5 * a)) return;
-      if (pv > price + 0.2 * a && (bestRes == null || pv < bestRes)) bestRes = pv;
-      if (pv < price - 0.2 * a && (bestSup == null || pv > bestSup)) bestSup = pv;
-    });
-    if (bestRes != null) ov.push({ k: 'line', t: 'res', p: bestRes, l: 'مقاومت' });
-    if (bestSup != null) ov.push({ k: 'line', t: 'sup', p: bestSup, l: 'حمایت' });
-    if (pdv) { ov.push({ k: 'line', t: 'pd', p: pdv.hi, l: 'سقف دیروز' }); ov.push({ k: 'line', t: 'pd', p: pdv.lo, l: 'کف دیروز' }); }
-    if (best && best.sweep && best.sweep.level != null) ov.push({ k: 'line', t: 'sweep', p: best.sweep.level, l: 'سطح شکار' });
-    if (ctx.shift && ctx.shift.level != null) ov.push({ k: 'line', t: 'choch', p: ctx.shift.level, l: 'CHoCH ۱h' });
-    if (ctx.shock && ctx.shock.i != null) ov.push({ k: 'mark', x: vi(ctx.shock.i), p: ctx.shock.dir === 'up' ? ctx.shock.h : ctx.shock.l, up: ctx.shock.dir === 'up', l: ctx.shock.dir === 'up' ? 'پامپ' : 'دامپ' });
-    out.ov = ov;
-  })();
-  if (best && cfg.tp2 && best.tps && best.tps.length > 2) {
-    best.tps = [{ p: best.tps[0].p, r: best.tps[0].r, pct: 50 }, { p: best.tps[1].p, r: best.tps[1].r, pct: 50 }];
-    best.tp = best.tps[1].p; best.rr = best.tps[1].r; best.expR = 0.5 * best.tps[0].r + 0.5 * best.tps[1].r;
-  }
-  if (best) {
-    out.score = best.score; out.reasons = best.reasons; out.warns = out.warns.concat(best.warns);
-    out.entry = best.entry; out.stop = best.stop; out.tp = best.tp; out.rr = best.rr; out.netRR = best.netRR; out.tps = best.tps; out.expR = best.expR;
-    out.counter = !!best.counter; out.limit = best.limit; out.zone = best.zone; out.setup = best.setup; out.side = best.side; out.sweepLevel = best.sweep ? best.sweep.level : null;
-    if (best.score >= minScore) {
-      out.verdict = best.side;
-      if (out.range && out.range.state === 'break' && !best.rangeSetup) {
-        var rLvl = out.range.dir === 'up' ? out.range.hi : out.range.lo, rDist = Math.abs(best.entry - rLvl) / a, rSame = (best.side === 'long') === (out.range.dir === 'up');
-        out.range.text = 'رنج ' + fmt(out.range.lo) + ' تا ' + fmt(out.range.hi) + ' به ' + (out.range.dir === 'up' ? 'بالا' : 'پایین') + ' شکسته شده. ' + (rSame ? 'سیگنال بالا از ستاپ «' + best.setup + '» اومده (نه از ریتست رنج) و هم‌جهت با شکسته؛ ورودش ' + rDist.toFixed(1) + ' ATR از سطح شکست دوره، یعنی تا حدی دنبال‌کردن حرکته و بهتره کوچیک‌تر وارد بشی.' : 'سیگنال بالا خلاف جهت شکست رنجه؛ با احتیاط.');
-        out.range.explained = true;
-      }
-      if (out.stale) { out.verdict = 'none'; out.warns.push('داده‌ی کندل‌ها قدیمیه؛ آخرین کندل بسته‌شده مربوط به ' + Math.round((now - out.closeT) / 60000) + ' دقیقه پیشه. سیگنال داده نمی‌شه.'); }
-      else if (ns.block) { out.verdict = 'none'; out.blocked = true; out.warns.push('ستاپ هست ولی خبر مهم نزدیکه: ' + ns.block.title); }
-    } else {
-      out.warns.push('امتیاز ' + best.score + ' از حداقل ' + minScore + ' کمتره');
-    }
-  } else {
-  }
+  var off = out.view.offset, nC = cl.length, vi = function (i) { return Math.max(0, i - off); };
+  var common = [], pdv = prevDay(cl), k, q;
+  if (ctx.rgx && out.range) { var R0 = ctx.rgx.rg; common.push({ k: 'range', hi: R0.hi, lo: R0.lo, x0: vi(R0.from), lean: ctx.rgx.lean.dir, state: ctx.rgx.state }); }
+  var pts = [], bestRes = null, bestSup = null;
+  ctx.sw.hi.concat(ctx.sw.lo).forEach(function (x) { if (x.i >= nC - 150) pts.push(x.p); });
+  pts.forEach(function (pv) {
+    var cnt = 0; for (q = 0; q < pts.length; q++) if (Math.abs(pts[q] - pv) <= 0.35 * a) cnt++;
+    if (cnt < 2) return;
+    if (ctx.rgx && (Math.abs(pv - ctx.rgx.rg.hi) < 0.5 * a || Math.abs(pv - ctx.rgx.rg.lo) < 0.5 * a)) return;
+    if (pv > price + 0.2 * a && (bestRes == null || pv < bestRes)) bestRes = pv;
+    if (pv < price - 0.2 * a && (bestSup == null || pv > bestSup)) bestSup = pv;
+  });
+  if (bestRes != null) common.push({ k: 'line', t: 'res', p: bestRes, l: 'مقاومت' });
+  if (bestSup != null) common.push({ k: 'line', t: 'sup', p: bestSup, l: 'حمایت' });
+  if (pdv) { common.push({ k: 'line', t: 'pd', p: pdv.hi, l: 'سقف دیروز' }); common.push({ k: 'line', t: 'pd', p: pdv.lo, l: 'کف دیروز' }); }
+  if (ctx.shift && ctx.shift.level != null) common.push({ k: 'line', t: 'choch', p: ctx.shift.level, l: 'CHoCH ۱h' });
+  if (ctx.shock && ctx.shock.i != null) common.push({ k: 'mark', x: vi(ctx.shock.i), p: ctx.shock.dir === 'up' ? ctx.shock.h : ctx.shock.l, up: ctx.shock.dir === 'up', l: ctx.shock.dir === 'up' ? 'پامپ' : 'دامپ' });
+
   function sideText(x) {
     if (x.veto) return x.veto;
     if (x.score < minScore) return 'ستاپ هست ولی امتیازش ' + x.score + ' و کمتر از حداقل ' + minScore + 'ه';
     return 'ستاپ معتبر با امتیاز ' + x.score;
   }
-  out.sides = { long: sideText(L), short: sideText(S), longOk: !L.veto && L.score >= minScore, shortOk: !S.veto && S.score >= minScore };
+  var newsBlocked = false;
+  function mkSec(key, title, L, S) {
+    var cands = [L, S].filter(function (x) { return !x.veto; });
+    cands.sort(function (x, y) { return y.score - x.score; });
+    var best = cands[0] || null;
+    var sec = { key: key, title: title, verdict: 'none', score: 0, reasons: [], warns: [], limit: false,
+      sides: { long: sideText(L), short: sideText(S), longOk: !L.veto && L.score >= minScore, shortOk: !S.veto && S.score >= minScore } };
+    var cand = best;
+    if (!cand) { var vs = [L, S].filter(function (x) { return x.fvgRef || x.swRef; }); vs.sort(function (x, y) { return (y.wait ? 1 : 0) - (x.wait ? 1 : 0); }); cand = vs[0] || null; }
+    if (cand) { sec.fvgRef = cand.fvgRef || null; sec.swRef = cand.swRef || null; sec.candSide = cand.side; if (!best) sec.candVeto = cand.veto; }
+    if (best) {
+      if (cfg.tp2 && best.tps && best.tps.length > 2) {
+        best.tps = [{ p: best.tps[0].p, r: best.tps[0].r, pct: 50 }, { p: best.tps[1].p, r: best.tps[1].r, pct: 50 }];
+        best.tp = best.tps[1].p; best.rr = best.tps[1].r; best.expR = 0.5 * best.tps[0].r + 0.5 * best.tps[1].r;
+      }
+      sec.score = best.score; sec.reasons = best.reasons; sec.warns = best.warns.slice();
+      if (best.score >= minScore) {
+        if (out.stale) { sec.warns.push('داده‌ی کندل‌ها قدیمیه؛ آخرین کندل بسته‌شده مربوط به ' + Math.round((now - out.closeT) / 60000) + ' دقیقه پیشه. سیگنال داده نمی‌شه.'); }
+        else if (ns.block) { sec.blocked = true; newsBlocked = true; sec.warns.push('ستاپ هست ولی خبر مهم نزدیکه: ' + ns.block.title); }
+        else {
+          sec.verdict = best.side; sec.side = best.side;
+          sec.entry = best.entry; sec.stop = best.stop; sec.tp = best.tp; sec.rr = best.rr; sec.netRR = best.netRR; sec.tps = best.tps; sec.expR = best.expR;
+          sec.limit = best.limit; sec.zone = best.zone; sec.setup = best.setup; sec.counter = !!best.counter; sec.rangeSetup = !!best.rangeSetup;
+          sec.sweepLevel = best.sweep ? best.sweep.level : (best.swRef ? best.swRef.level : null);
+        }
+      } else sec.warns.push('امتیاز ' + best.score + ' از حداقل ' + minScore + ' کمتره');
+    }
+    var ov = common.slice();
+    if (key === 'fvg') {
+      var ref = sec.fvgRef;
+      ctx.fvgs.filter(function (f) { return !f.dead && f.filled < 0.9 && f.end >= nC - 70 && !(ref && f.mid === ref.mid); })
+        .sort(function (x, y) { return Math.abs((x.lo + x.hi) / 2 - price) - Math.abs((y.lo + y.hi) / 2 - price); })
+        .slice(0, 3).forEach(function (f) { ov.push({ k: 'fvg', dir: f.dir, lo: f.lo, hi: f.hi, x0: vi(f.mid - 1) }); });
+      if (ref) ov.push({ k: 'sigfvg', dir: ref.dir, lo: ref.lo, hi: ref.hi, x0: vi(ref.i0), x1: vi(ref.i1), ok: sec.verdict !== 'none', age: ref.age, filled: ref.filled });
+    }
+    if (key === 'sweep' && sec.swRef) {
+      var w = sec.swRef;
+      ov.push({ k: 'line', t: 'sweep', p: w.level, l: 'سطح شکار' });
+      ov.push({ k: 'swp', si: (w.si == null || w.daily) ? null : vi(w.si), kx: vi(w.k), extreme: w.extreme, level: w.level, dir: w.dir, ok: sec.verdict !== 'none' });
+    }
+    sec.ov = ov;
+    return sec;
+  }
+  var secs = [mkSec('fvg', 'بازگشت به FVG', LF, SF), mkSec('sweep', 'جمع‌کردن نقدینگی', LS, SS)];
+  if (RBL && RBS) { var rsec = mkSec('range', 'شکست رنج + ریتست', RBL, RBS); if (rsec.verdict !== 'none') secs.push(rsec); }
+  out.secs = secs;
+  var valid = secs.filter(function (x) { return x.verdict !== 'none'; }).sort(function (x, y) { return y.score - x.score; });
+  var top = valid[0] || null;
+  if (out.stale) out.cwarns = ['داده‌ی کندل‌ها قدیمیه؛ آخرین کندل بسته‌شده مربوط به ' + Math.round((now - out.closeT) / 60000) + ' دقیقه پیشه. سیگنال داده نمی‌شه.'];
+  out.blocked = !top && newsBlocked;
+  if (out.blocked) out.cwarns = ['ستاپ هست ولی خبر مهم نزدیکه: ' + ns.block.title];
+  out.ov = secs[0].ov;
+  /* فیلدهای قدیمی (برای بک‌تست، بررسی سیگنال و مدیریت معامله) = بهترین سیگنال معتبر */
+  out.score = Math.max.apply(null, secs.map(function (x) { return x.score; }));
+  if (top) {
+    out.score = top.score; out.reasons = top.reasons; out.warns = out.warns.concat(top.warns);
+    out.entry = top.entry; out.stop = top.stop; out.tp = top.tp; out.rr = top.rr; out.netRR = top.netRR; out.tps = top.tps; out.expR = top.expR;
+    out.counter = top.counter; out.limit = top.limit; out.zone = top.zone; out.setup = top.setup; out.side = top.side; out.sweepLevel = top.sweepLevel;
+    out.verdict = top.verdict;
+    if (out.range && out.range.state === 'break' && !top.rangeSetup) {
+      var rLvl = out.range.dir === 'up' ? out.range.hi : out.range.lo, rDist = Math.abs(top.entry - rLvl) / a, rSame = (top.side === 'long') === (out.range.dir === 'up');
+      out.range.text = 'رنج ' + fmt(out.range.lo) + ' تا ' + fmt(out.range.hi) + ' به ' + (out.range.dir === 'up' ? 'بالا' : 'پایین') + ' شکسته شده. ' + (rSame ? 'سیگنال بالا از ستاپ «' + top.setup + '» اومده (نه از ریتست رنج) و هم‌جهت با شکسته؛ ورودش ' + rDist.toFixed(1) + ' ATR از سطح شکست دوره، یعنی تا حدی دنبال‌کردن حرکته و بهتره کوچیک‌تر وارد بشی.' : 'سیگنال بالا خلاف جهت شکست رنجه؛ با احتیاط.');
+      out.range.explained = true;
+    }
+  }
+  function joinSide(sd) {
+    var ok = secs.filter(function (x) { return x.sides[sd + 'Ok']; })[0];
+    if (ok) return ok.sides[sd];
+    return secs.slice(0, 2).map(function (x) { return x.title + ': ' + x.sides[sd]; }).join(' | ');
+  }
+  out.sides = { long: joinSide('long'), short: joinSide('short'), longOk: secs.some(function (x) { return x.sides.longOk; }), shortOk: secs.some(function (x) { return x.sides.shortOk; }) };
   if (out.verdict !== 'none') {
     out.size = sizePosition({ balance: p.balance, riskPct: cfg.riskPct, entry: out.entry, stop: out.stop, leverage: cfg.leverage, feeRate: ctx.feeRate });
   }
@@ -1276,7 +1336,7 @@ function analyzeSym(b, tfo) {
     });
   });
 }
-function signalKey(a) { return a.verdict + ':' + (a.entry ? E.fmt(a.entry) : ''); }
+function signalKey(a) { return a.secs ? a.secs.map(function (x) { return x.key + ':' + x.verdict + ':' + (x.entry ? E.fmt(x.entry) : ''); }).join('|') : a.verdict + ':' + (a.entry ? E.fmt(a.entry) : ''); }
 function friendlyErr(e) {
   var m = (e && e.message) ? String(e.message) : String(e);
   if (/cloned/i.test(m)) return 'این محیط اجازه اتصال نمی‌ده';
@@ -1336,7 +1396,7 @@ var ICON = {
 };
 function header() {
   var c = st.cfg, p = todayPnl();
-  return '<div class="head"><div class="wrap"><div class="brand"><h1>رادار ترید</h1><small>فیلتر ستاپ، نه سیگنال تضمینی · نسخه ۴.۶</small></div>' +
+  return '<div class="head"><div class="wrap"><div class="brand"><h1>رادار ترید</h1><small>فیلتر ستاپ، نه سیگنال تضمینی · نسخه ۴.۷</small></div>' +
     '<div class="acct"><div class="bal">' + N(balance()) + ' <span style="font-size:13px;font-weight:400">دلار</span><small>موجودی ژورنال (شروع ' + N(c.balance0, 0) + ')</small></div>' +
     '<div class="todayv ' + (p >= 0 ? 'pos' : 'neg') + '">' + '<span class="n">' + sgn(p) + '</span><small>سود/ضرر ثبت‌شده‌ی امروز</small></div></div></div></div>';
 }
@@ -1370,12 +1430,14 @@ function chartSvg(r) {
   if (r.zone && r.verdict !== 'none') { lo = Math.min(lo, r.zone.lo); hi = Math.max(hi, r.zone.hi); }
   var ov = r.ov || [], pad = (r.atr || (hi - lo) / 10) * 1.2, used = {};
   ov.forEach(function (o) {
+    if (o.k === 'sigfvg') { lo = Math.min(lo, o.lo); hi = Math.max(hi, o.hi); }
+    if (o.k === 'swp') { lo = Math.min(lo, o.extreme); hi = Math.max(hi, o.extreme); }
     if (o.k === 'line') { if (o.p >= lo - pad && o.p <= hi + pad) { lv.push({ p: o.p, k: o.l, c: OVC[o.t], d: o.t === 'pd' ? '1 3' : '6 3' }); used[o.t] = o.l; lo = Math.min(lo, o.p); hi = Math.max(hi, o.p); } else o.skip = true; }
   });
   var span = (hi - lo) || 1;
   var y = function (p) { return padT + (hi - p) / span * (H - padT - padB); };
   var bw = (W - padR) / cs.length, s = '', cx = function (idx) { return Math.max(0, Math.min(W - padR, idx * bw)); };
-  if (r.zone && r.verdict !== 'none') s += '<rect class="zone" x="0" width="' + (W - padR) + '" y="' + y(r.zone.hi).toFixed(1) + '" height="' + Math.max(2, y(r.zone.lo) - y(r.zone.hi)).toFixed(1) + '"/>';
+  if (r.zone && r.verdict !== 'none' && !ov.some(function (o) { return o.k === 'sigfvg'; })) s += '<rect class="zone" x="0" width="' + (W - padR) + '" y="' + y(r.zone.hi).toFixed(1) + '" height="' + Math.max(2, y(r.zone.lo) - y(r.zone.hi)).toFixed(1) + '"/>';
   ov.forEach(function (o) {
     if (o.k === 'range') {
       var yt = Math.max(padT - 6, y(o.hi)), yb = Math.min(H - padB + 6, y(o.lo)), x0 = cx(o.x0), arrow = o.lean === 'up' ? ' ↑' : o.lean === 'down' ? ' ↓' : '';
@@ -1383,10 +1445,22 @@ function chartSvg(r) {
       s += '<text class="lt" x="' + (x0 + 3).toFixed(1) + '" y="' + (yt + 10).toFixed(1) + '" fill="#e0a43a">' + (o.state === 'break' ? 'رنج شکسته' : 'رنج') + arrow + '</text>';
       used.range = 1;
     } else if (o.k === 'fvg') {
-      var x1 = cx(o.x0), col = o.dir === 'bull' ? 'var(--buy)' : 'var(--sell)';
-      s += '<rect x="' + x1.toFixed(1) + '" width="' + (W - padR - x1).toFixed(1) + '" y="' + y(o.hi).toFixed(1) + '" height="' + Math.max(2, y(o.lo) - y(o.hi)).toFixed(1) + '" fill="' + col + '" opacity=".14"/>';
-      s += '<text class="lt" x="' + (x1 + 3).toFixed(1) + '" y="' + (y(o.hi) + 9).toFixed(1) + '" fill="' + col + '">FVG</text>';
-      used['fvg' + o.dir] = 1;
+      /* FVG دیگه: خاکستری و خط‌چین، فقط برای اطلاع؛ ربطی به سیگنال نداره */
+      var x1 = cx(o.x0);
+      s += '<rect x="' + x1.toFixed(1) + '" width="' + (W - padR - x1).toFixed(1) + '" y="' + y(o.hi).toFixed(1) + '" height="' + Math.max(2, y(o.lo) - y(o.hi)).toFixed(1) + '" fill="#8b999e" opacity=".10" stroke="#8b999e" stroke-width="1" stroke-dasharray="2 3"/>';
+      used.fvgdim = 1;
+    } else if (o.k === 'sigfvg') {
+      /* FVG سیگنال: نوار پشت ۳ کندل تشکیل‌دهنده + کادر پررنگ از همون کندل تا لبه‌ی راست */
+      var g0 = cx(o.x0), g1 = Math.min(W - padR, (o.x1 + 1) * bw), sc = o.dir === 'bull' ? 'var(--buy)' : 'var(--sell)', yh = y(o.hi), yl = y(o.lo);
+      s += '<rect x="' + g0.toFixed(1) + '" width="' + Math.max(2, g1 - g0).toFixed(1) + '" y="' + padT + '" height="' + (H - padT - padB) + '" fill="' + sc + '" opacity=".13"/>';
+      s += '<rect x="' + g0.toFixed(1) + '" width="' + (W - padR - g0).toFixed(1) + '" y="' + yh.toFixed(1) + '" height="' + Math.max(4, yl - yh).toFixed(1) + '" fill="' + sc + '" opacity="' + (o.ok ? '.32' : '.20') + '" stroke="' + sc + '" stroke-width="1.8"' + (o.ok ? '' : ' stroke-dasharray="5 3"') + '/>';
+      var ym = (yh + yl) / 2;
+      s += '<text class="lt" x="' + ((g0 + g1) / 2).toFixed(1) + '" y="' + (H - 1) + '" text-anchor="middle" fill="' + sc + '" style="font-weight:800;direction:rtl;unicode-bidi:isolate">۳ کندل</text>';
+      s += '<line x1="196" y1="13" x2="' + g0.toFixed(1) + '" y2="' + ym.toFixed(1) + '" stroke="' + sc + '" stroke-width="1.2" stroke-dasharray="3 2"/>';
+      s += '<rect x="3" y="3" width="193" height="20" rx="5" fill="var(--bg)" stroke="' + sc + '" stroke-width="1.5"' + (o.ok ? '' : ' stroke-dasharray="4 3"') + '/>';
+      s += '<text class="lt" x="192" y="16.5" text-anchor="start" fill="' + sc + '" style="font-size:10px;font-weight:800;direction:rtl;unicode-bidi:isolate">' + (o.ok ? 'FVG سیگنال (ورود)' : 'FVG مورد نظر (بدون سیگنال)') + '</text>';
+      s += '<text class="lt" x="8" y="16.5" fill="' + sc + '" style="font-size:10px;font-weight:700">' + E.fmt(o.lo) + '–' + E.fmt(o.hi) + '</text>';
+      used.sigfvg = o.ok ? 'ok' : 'cand';
     }
   });
   for (i = 0; i < cs.length; i++) {
@@ -1395,6 +1469,19 @@ function chartSvg(r) {
     s += '<line class="' + k + '" x1="' + x.toFixed(1) + '" x2="' + x.toFixed(1) + '" y1="' + y(c.h).toFixed(1) + '" y2="' + y(c.l).toFixed(1) + '" stroke-width="1"/>';
     s += '<rect class="' + k + '" x="' + (x - bw * 0.34).toFixed(1) + '" width="' + (bw * 0.68).toFixed(1) + '" y="' + top.toFixed(1) + '" height="' + Math.max(1, bot - top).toFixed(1) + '"/>';
   }
+  ov.forEach(function (o) {
+    if (o.k !== 'swp') return;
+    var ex = o.kx * bw + bw / 2, ey = y(o.extreme), oc = '#ff9f43';
+    if (o.si != null) {
+      var sx = o.si * bw + bw / 2, sy = y(o.level);
+      s += '<line x1="' + sx.toFixed(1) + '" x2="' + ex.toFixed(1) + '" y1="' + sy.toFixed(1) + '" y2="' + sy.toFixed(1) + '" stroke="' + oc + '" stroke-width="2"/>';
+      s += '<circle cx="' + sx.toFixed(1) + '" cy="' + sy.toFixed(1) + '" r="3.5" fill="' + oc + '"/>';
+      s += '<text class="lt" x="' + Math.max(28, Math.min(W - padR - 28, sx)).toFixed(1) + '" y="' + (sy + (o.dir === 'bull' ? 13 : -6)).toFixed(1) + '" text-anchor="middle" fill="' + oc + '" style="font-weight:800;paint-order:stroke;stroke:var(--bg);stroke-width:3px;direction:rtl;unicode-bidi:isolate">' + (o.dir === 'bull' ? 'کف قبلی' : 'سقف قبلی') + '</text>';
+    }
+    s += '<circle cx="' + ex.toFixed(1) + '" cy="' + ey.toFixed(1) + '" r="5.5" fill="none" stroke="' + oc + '" stroke-width="2"/>';
+    s += '<text class="lt" x="' + Math.max(28, Math.min(W - padR - 28, ex)).toFixed(1) + '" y="' + (ey + (o.dir === 'bull' ? 16 : -9)).toFixed(1) + '" text-anchor="middle" fill="' + oc + '" style="font-weight:800;paint-order:stroke;stroke:var(--bg);stroke-width:3px;direction:rtl;unicode-bidi:isolate">شکار شد</text>';
+    used.swp = 1;
+  });
   ov.forEach(function (o) {
     if (o.k !== 'mark') return;
     var mx = o.x * bw + bw / 2, my = y(o.p) + (o.up ? -7 : 7);
@@ -1409,8 +1496,9 @@ function chartSvg(r) {
   });
   var lg = [];
   if (used.range) lg.push(['#e0a43a', 'کادر رنج (حمایت/مقاومت اصلی؛ فلش = تمایل شکست)']);
-  if (used.fvgbull) lg.push(['var(--buy)', 'FVG صعودی: ناحیه‌ی خرید']);
-  if (used.fvgbear) lg.push(['var(--sell)', 'FVG نزولی: ناحیه‌ی فروش']);
+  if (used.sigfvg) lg.push(['var(--accent)', used.sigfvg === 'ok' ? 'FVG سیگنال: همین ناحیه‌ی ورود (کادر پررنگ؛ نوار پشت ۳ کندلی که این FVG رو ساختن)' : 'FVG مورد نظر: کاندیدا ولی هنوز شرایط سیگنال کامل نیست']);
+  if (used.fvgdim) lg.push(['#8b999e', 'FVG دیگه (خاکستری): فقط نمایش، ربطی به سیگنال ندارن']);
+  if (used.swp) lg.push(['#ff9f43', 'دایره‌ی توخالی: کندلی که نقدینگی رو شکار کرد · نقطه‌ی پر: کف/سقف قبلی']);
   if (used.res) lg.push([OVC.res, 'مقاومت نزدیک']);
   if (used.sup) lg.push([OVC.sup, 'حمایت نزدیک']);
   if (used.pd) lg.push([OVC.pd, 'سقف/کف دیروز']);
@@ -1437,7 +1525,7 @@ function enterPos(r, pending) {
   var z = sizeFor(r); if (z.blocked) return null;
   var p = { id: 'p' + Date.now().toString(36) + Math.random().toString(36).slice(2, 4), sym: r.sym, side: r.verdict, tf: r.tf, entry: r.entry, stop: r.stop, stop0: r.stop,
     tps: (r.tps || [{ p: r.tp, r: r.rr, pct: 100 }]).map(function (t) { return { p: t.p, r: t.r, pct: t.pct }; }), qty: z.qty, remQty: z.qty, notional: z.notional, riskUsd: z.riskUsd,
-    fee: st.cfg.fee / 100, zone: r.zone ? { lo: r.zone.lo, hi: r.zone.hi } : null, sweepLevel: r.sweepLevel || null, openedAt: Date.now(), hit: 0, maxR: 0, realized: 0, limit: !!r.limit, counter: !!r.counter, status: pending ? 'pending' : 'open', lastAdv: '' };
+    fee: st.cfg.fee / 100, zone: r.zone ? { lo: r.zone.lo, hi: r.zone.hi } : null, sweepLevel: r.sweepLevel || null, openedAt: Date.now(), hit: 0, maxR: 0, realized: 0, limit: !!r.limit, counter: !!r.counter, status: pending ? 'pending' : 'open', lastAdv: '', strat: r.sec || null, setup: r.setup || '' };
   openPos().push(p); save(); return p;
 }
 function pnlPart(p, px, q) { var s = p.side === 'long' ? 1 : -1; return (px - p.entry) * s * q - q * p.entry * p.fee - q * px * p.fee; }
@@ -1529,30 +1617,65 @@ function ladder(tps, hit, entry, side) {
     return '<div class="' + (i < (hit || 0) ? 'done' : '') + '"><b>' + (i < (hit || 0) ? '✓ ' : '') + 'TP' + (i + 1) + '</b><span>' + P(t.p) + '</span><span class="sub">' + N(t.r, 1) + 'R</span><span>' + t.pct + '٪ ببند</span></div>';
   }).join('') + '</div>';
 }
-function card(r) {
-  var v = r.verdict, cls = v === 'long' ? 'buy' : v === 'short' ? 'sell' : 'none';
-  var label = v === 'long' ? (r.limit ? 'خرید با لیمیت' : 'خرید') : v === 'short' ? (r.limit ? 'فروش با لیمیت' : 'فروش') : 'وارد نشو';
-  var srcTxt = 'Binance پرپچوال';
-  var h = '<div class="card sig"><div class="sig-top"><div><span class="sym">' + esc(r.sym) + '</span> <span class="pill ' + cls + '">' + label + '</span>' + (S.fresh[r.sym] ? '<span class="pill new">جدید</span>' : '') +
-    '<div class="sub">' + 'کلوز آخرین کندل بسته‌شده ' + (r.closeT ? '(' + hhmm(r.closeT) + ') ' : '') + P(r.price) + ' · ' + esc(r.tf) + ' · ' + srcTxt + ' · ' + hhmm(r.ts) + '</div>' + (r.lb && isFinite(r.lb.last) ? '<div class="sub"><b>قیمت پرپچوال ' + 'Binance' + ' الان: ' + P(r.lb.last) + '</b></div>' : '') + '</div>' +
-    '<div class="score">امتیاز<br><b class="n">' + (r.score || 0) + '</b></div></div>';
+var SECK = ['verdict', 'side', 'entry', 'stop', 'tp', 'rr', 'netRR', 'tps', 'expR', 'limit', 'zone', 'setup', 'score', 'reasons', 'warns', 'sweepLevel', 'counter', 'sides', 'ov'];
+function secRec(r, sec) { var o = {}, k; for (k in r) o[k] = r[k]; SECK.forEach(function (x) { o[x] = sec[x]; }); o.sec = sec.key; return o; }
+function recFor(b) {
+  var r = S.results[b.getAttribute('data-sym')], key = b.getAttribute('data-strat');
+  if (!r) return null;
+  var sec = (r.secs || []).filter(function (x) { return x.key === key; })[0];
+  return sec ? secRec(r, sec) : r;
+}
+function chtOpen(key, dflt) { S.cht = S.cht || {}; return S.cht[key] != null ? S.cht[key] : dflt; }
+function secInfo(sec) {
+  var f = sec.fvgRef, w = sec.swRef;
+  if (sec.key === 'fvg') {
+    if (!f) return '<div class="fvginfo">FVG تازه‌ای که قیمت بهش نزدیک باشه (یا تازه لمسش کرده باشه) پیدا نشد. توی چارت، FVG‌های دیگه‌ی اطراف با رنگ خاکستری نشون داده شدن؛ اونا سیگنال نیستن.</div>';
+    return '<div class="fvginfo"><b>FVG مورد نظر:</b> <span class="chip ' + f.dir + '">' + (f.dir === 'bull' ? 'صعودی · ناحیه‌ی خرید' : 'نزولی · ناحیه‌ی فروش') + '</span> بین ' + P(f.lo) + ' و ' + P(f.hi) +
+      '<div class="sub">ساخته‌شده از ۳ کندل که کندل اولش ساعت ' + hhmm(f.t0) + ' بوده (حدود ' + (f.age + 1) + ' کندل پیش) · تا حالا ' + Math.round(f.filled * 100) + '٪ پر شده · روی چارت با کادر پررنگ و نوار عمودی پشت ۳ کندلش مشخصه.</div>' +
+      (sec.verdict === 'none' && sec.candVeto ? '<div class="sub" style="color:var(--warn)">هنوز سیگنال نیست: ' + esc(sec.candVeto) + '</div>' : '') + '</div>';
+  }
+  if (sec.key === 'sweep') {
+    if (!w) return '<div class="fvginfo">توی ۲ کندل بسته‌شده‌ی آخر، شکار سقف/کف قبلی و برگشت دیده نشد.</div>';
+    return '<div class="fvginfo"><b>نقدینگی شکارشده:</b> ' + (w.dir === 'bull' ? 'کف' : 'سقف') + (w.daily ? ' دیروز' : w.range ? ' رنج' : ' قبلی') + ' روی ' + P(w.level) + ' · سایه تا ' + P(w.extreme) + ' رفت و کندل برگشت' +
+      (sec.verdict === 'none' && sec.candVeto ? '<div class="sub" style="color:var(--warn)">هنوز سیگنال نیست: ' + esc(sec.candVeto) + '</div>' : '') + '</div>';
+  }
+  return '';
+}
+function secBlock(r, sec) {
+  var rec = secRec(r, sec), v = rec.verdict, cls = v === 'long' ? 'buy' : v === 'short' ? 'sell' : 'none';
+  var label = v === 'long' ? (rec.limit ? 'خرید با لیمیت' : 'خرید') : v === 'short' ? (rec.limit ? 'فروش با لیمیت' : 'فروش') : 'سیگنال نیست';
+  var desc = sec.key === 'fvg' ? 'قیمت به ناحیه‌ی FVG (گپ بین ۳ کندل) برمی‌گرده؛ ورود روی همین ناحیه، حد ضرر پشتش.' : sec.key === 'sweep' ? 'قیمت سقف/کف قبلی رو با سایه می‌زنه (جمع‌کردن استاپ‌ها) و برمی‌گرده؛ ورود بعد از کندل تأیید.' : 'سقف/کف رنج با کندل قوی شکسته و ریتست شده.';
+  var h = '<div class="sec sec-' + sec.key + '"><div class="sec-h"><div><span class="sec-t">' + esc(sec.title) + '</span> <span class="pill ' + cls + '">' + label + '</span></div><div class="score">امتیاز <b class="n">' + (sec.score || 0) + '</b></div></div>' +
+    '<div class="sub">' + desc + '</div>' + secInfo(sec);
   if (v !== 'none') {
-    var z = sizeFor(r), tps = r.tps || [{ p: r.tp, r: r.rr, pct: 100 }], ex = findPos(r.sym, v);
-    h += '<div class="lv"><div><small>ورود' + (r.limit ? ' (لیمیت)' : '') + '</small><b>' + P(r.entry) + '</b></div><div class="sl"><small>حد ضرر</small><b>' + P(r.stop) + '</b></div><div><small>ریسک / ریوارد</small><b>1 : ' + N(r.expR != null ? r.expR : r.rr, 1) + '</b></div></div>';
-    h += '<div class="sig-body">' + liveStatus(r) + '<div class="sub" style="margin-bottom:4px"><b>هدف‌ها و درصد بستن:</b></div>' + ladder(tps, 0) +
+    var z = sizeFor(rec), tps = rec.tps || [{ p: rec.tp, r: rec.rr, pct: 100 }], ex = findPos(rec.sym, v);
+    h += '<div class="lv"><div><small>ورود' + (rec.limit ? ' (لیمیت)' : '') + '</small><b>' + P(rec.entry) + '</b></div><div class="sl"><small>حد ضرر</small><b>' + P(rec.stop) + '</b></div><div><small>ریسک / ریوارد</small><b>1 : ' + N(rec.expR != null ? rec.expR : rec.rr, 1) + '</b></div></div>';
+    h += '<div style="padding:10px 0 0">' + liveStatus(rec) + '<div class="sub" style="margin-bottom:4px"><b>هدف‌ها و درصد بستن:</b></div>' + ladder(tps, 0) +
       '<div class="sub" style="margin:4px 0 8px">بعد از TP1 حد ضرر رو بیار روی نقطه ورود (ریسک‌فری). اپ بعد از ثبت معامله پیگیری می‌کنه و می‌گه کِی ببندی.</div>' +
-      '<div class="kv"><div><span>فاصله‌ی حد ضرر</span><b><span class="n">' + N(Math.abs(r.entry - r.stop) / r.entry * 100, 2) + '٪</span> (' + N(Math.abs(r.entry - r.stop) / r.atr, 1) + ' ATR)</b></div><div><span>خالص ریسک به ریوارد تا TP نهایی</span><b>1 : ' + N(r.netRR, 1) + '</b></div>' +
-      '<div><span>الگو</span><b>' + esc(r.setup) + '</b></div><div><span>امتیاز</span><b>' + r.score + '</b></div></div>';
+      '<div class="kv"><div><span>فاصله‌ی حد ضرر</span><b><span class="n">' + N(Math.abs(rec.entry - rec.stop) / rec.entry * 100, 2) + '٪</span> (' + N(Math.abs(rec.entry - rec.stop) / rec.atr, 1) + ' ATR)</b></div><div><span>خالص ریسک به ریوارد تا TP نهایی</span><b>1 : ' + N(rec.netRR, 1) + '</b></div>' +
+      '<div><span>الگو</span><b>' + esc(rec.setup) + '</b></div><div><span>امتیاز</span><b>' + rec.score + '</b></div></div>';
     if (z.warn.length) h += '<ul class="why w">' + z.warn.map(function (w) { return '<li>' + esc(w) + '</li>'; }).join('') + '</ul>';
-    h += ex ? '<div class="banner good" style="margin:8px 0 0">✓ این معامله توی تب «معاملات» ثبت شده' + (ex.status === 'pending' ? ' (سفارش لیمیت در انتظار).' : '.') + '</div>' : '<button class="btn main" style="width:100%;margin-top:8px"' + (z.blocked ? ' disabled' : '') + ' data-act="' + (r.limit ? 'enterlimit' : 'enter') + '" data-sym="' + esc(r.sym) + '">' + (r.limit ? 'سفارش لیمیت گذاشتم (پیگیری کن)' : '✓ وارد این معامله شدم (ثبت کن)') + '</button>';
-  } else h += '<div class="sig-body">';
-  if (r.reasons.length && v !== 'none') h += '<ul class="why">' + r.reasons.map(function (w) { return '<li>' + esc(w) + '</li>'; }).join('') + '</ul>';
-  if (r.warns.length) h += '<ul class="why w">' + r.warns.map(function (w) { return '<li>' + esc(w) + '</li>'; }).join('') + '</ul>';
-  if (r.sides) h += '<ul class="why" style="margin-top:6px"><li><b class="pos">خرید:</b> ' + esc(r.sides.long) + '</li><li><b class="neg">فروش:</b> ' + esc(r.sides.short) + '</li></ul>';
+    h += ex ? '<div class="banner good" style="margin:8px 0 0">✓ این معامله توی تب «معاملات» ثبت شده' + (ex.status === 'pending' ? ' (سفارش لیمیت در انتظار).' : '.') + '</div>' : '<button class="btn main" style="width:100%;margin-top:8px"' + (z.blocked ? ' disabled' : '') + ' data-act="' + (rec.limit ? 'enterlimit' : 'enter') + '" data-sym="' + esc(rec.sym) + '" data-strat="' + sec.key + '">' + (rec.limit ? 'سفارش لیمیت گذاشتم (پیگیری کن)' : '✓ وارد این معامله شدم (ثبت کن)') + '</button>';
+    h += '</div>';
+    if (rec.reasons.length) h += '<ul class="why" style="margin-top:8px">' + rec.reasons.map(function (w) { return '<li>' + esc(w) + '</li>'; }).join('') + '</ul>';
+  }
+  if (rec.warns.length) h += '<ul class="why w" style="margin-top:6px">' + rec.warns.map(function (w) { return '<li>' + esc(w) + '</li>'; }).join('') + '</ul>';
+  if (rec.sides && v === 'none') h += '<ul class="why" style="margin-top:6px"><li><b class="pos">خرید:</b> ' + esc(rec.sides.long) + '</li><li><b class="neg">فروش:</b> ' + esc(rec.sides.short) + '</li></ul>';
+  var ck = r.sym + ':' + sec.key, dOpen = chtOpen(ck, (sec.key === 'fvg' && !!sec.fvgRef) || v !== 'none');
+  h += '<details class="cht"' + (dOpen ? ' open' : '') + ' data-sym="' + esc(ck) + '"><summary>چارت ' + (sec.key === 'fvg' ? 'FVG' : sec.key === 'sweep' ? 'جمع‌کردن نقدینگی' : 'رنج') + '</summary>' + chartSvg(rec) + '</details>';
+  return h + '</div>';
+}
+function card(r) {
+  var h = '<div class="card sig"><div class="sig-top"><div><span class="sym">' + esc(r.sym) + '</span> ' + (S.fresh[r.sym] ? '<span class="pill new">جدید</span>' : '') +
+    '<div class="sub">' + 'کلوز آخرین کندل بسته‌شده ' + (r.closeT ? '(' + hhmm(r.closeT) + ') ' : '') + P(r.price) + ' · ' + esc(r.tf) + ' · Binance پرپچوال · ' + hhmm(r.ts) + '</div>' + (r.lb && isFinite(r.lb.last) ? '<div class="sub"><b>قیمت پرپچوال Binance الان: ' + P(r.lb.last) + '</b></div>' : '') + '</div>' +
+    '<div class="score">بهترین امتیاز<br><b class="n">' + (r.score || 0) + '</b></div></div><div class="sig-body">';
+  if (r.cwarns && r.cwarns.length) h += '<ul class="why w">' + r.cwarns.map(function (w) { return '<li>' + esc(w) + '</li>'; }).join('') + '</ul>';
   if (r.range && r.range.text) h += '<div class="banner" style="background:var(--raise);margin:8px 0 0"><b>رنج / حمایت و مقاومت:</b> ' + esc(r.range.text) + (r.range.leanWhy && r.range.leanWhy.length && r.range.state === 'inside' ? '<div class="sub">دلیل تمایل: ' + esc(r.range.leanWhy.join('، ')) + '</div>' : '') + '</div>';
   if (r.shift) h += '<div class="banner warn" style="margin:8px 0 0">ساختار ۱ساعته ' + (r.shift.age + 1) + ' کندل پیش به سمت ' + (r.shift.dir === 'up' ? 'بالا' : 'پایین') + ' شکسته (CHoCH)؛ احتمال تغییر روند.</div>';
   if (r.bias) h += '<div class="sub" style="margin-top:6px">روند: ۴ساعته ' + dirFa(r.bias.h4) + (r.bias.h1 ? ' · ۱ساعته ' + dirFa(r.bias.h1) : '') + (r.btc ? ' · بیت‌کوین ' + dirFa(r.btc.dir) : '') + '</div>';
-  h += '<details class="cht"' + (S.open === r.sym ? ' open' : '') + ' data-sym="' + esc(r.sym) + '"><summary>چارت</summary>' + chartSvg(r) + '</details>';
+  var secs = r.secs || [], fv = secs.filter(function (x) { return x.verdict !== 'none'; });
+  if (fv.length > 1 && fv[0].side === fv[1].side) h += '<div class="banner warn" style="margin:8px 0 0">هر دو استراتژی ' + (fv[0].side === 'long' ? 'خرید' : 'فروش') + ' می‌دن، ولی ورود و حد ضررشون فرق داره. دو معامله‌ی جدا روی یه ارز باز نکن؛ یکیش رو انتخاب کن (ریسکت دو برابر می‌شه).</div>';
+  h += secs.map(function (x) { return secBlock(r, x); }).join('');
   return h + '</div></div>';
 }
 function dirFa(d) { return d === 'up' ? 'صعودی' : d === 'down' ? 'نزولی' : 'بدون روند'; }
@@ -2143,7 +2266,8 @@ function tabSettings() {
 function tabGuide() {
   var c = st.cfg;
   function sec(t, body) { return '<div class="card"><h2>' + t + '</h2>' + body + '</div>'; }
-  return sec('اپ روی چه استراتژی‌ای کار می‌کنه؟', '<p style="margin:0">ترکیب <b>پرایس اکشن</b> و <b>FVG</b> با شکار نقدینگی، به‌صورت «اول روند بزرگ، بعد ورود کوچک». فقط وقتی همه شرط‌ها با هم جور باشن سیگنال می‌ده، وگرنه می‌گه «وارد نشو». برای هر ارز هم خرید و هم فروش بررسی می‌شه و دلیل رد شدن هر کدوم روی کارت نوشته شده.</p>') +
+  return sec('دو استراتژی جدا (نسخه ۴.۷)', '<p style="margin:0">روی هر ارز، دو بخش مستقل می‌بینی؛ هرکدوم ورود، حد ضرر، هدف و امتیاز خودش رو داره:</p><ul class="why"><li><b>بازگشت به FVG (بخش اصلی):</b> فقط یه FVG مشخص برای سیگنال انتخاب می‌شه. روی چارت همون FVG با کادر پررنگ و یه نوار عمودی پشت ۳ کندلی که ساختنش مشخصه و قیمت‌هاش بالای کادر نوشته شده. بقیه‌ی FVG‌ها خاکستری و خط‌چین‌ان و ربطی به سیگنال ندارن.</li><li><b>جمع‌کردن نقدینگی:</b> سایه‌ی کندل سقف/کف قبلی رو می‌زنه و برمی‌گرده. روی چارت نقطه‌ی پر = کف/سقف قبلی و دایره‌ی توخالی = کندلی که شکارش کرد. ورود بعد از کندل تأیید و حد ضرر پشت سایه‌ست.</li><li>اگه شکار نقدینگی هم‌زمان با FVG اتفاق بیفته، توی بخش FVG به‌عنوان «هم‌پوشان» امتیاز اضافه می‌گیره. وقتی روند بالاتر مشخص نیست یا معامله خلاف رونده، فقط همین ستاپ هم‌پوشان قبول می‌شه (نه هرکدوم به‌تنهایی).</li><li>اگه هر دو بخش هم‌جهت سیگنال بدن، اپ هشدار می‌ده که دو معامله‌ی جدا باز نکنی.</li></ul>') +
+    sec('اپ روی چه استراتژی‌ای کار می‌کنه؟', '<p style="margin:0">ترکیب <b>پرایس اکشن</b> و <b>FVG</b> با شکار نقدینگی، به‌صورت «اول روند بزرگ، بعد ورود کوچک». فقط وقتی همه شرط‌ها با هم جور باشن سیگنال می‌ده، وگرنه می‌گه «وارد نشو». برای هر ارز هم خرید و هم فروش بررسی می‌شه و دلیل رد شدن هر کدوم روی کارت نوشته شده.</p>') +
     sec('چرا فقط کندل بسته‌شده؟', '<p style="margin:0">تحلیل فقط روی کندل‌هایی انجام می‌شه که بسته شدن. کندلی که هنوز در حال شکل گرفتنه، با هر تکون قیمت عوض می‌شه و سیگنال رو الکی می‌اندازه یا می‌سازه. پس حکم اپ برای هر تایم‌فریم فقط وقتی کندل جدید بسته می‌شه عوض می‌شه. ورود، حد ضرر و حد سود از کلوز آخرین کندل بسته‌شده حساب می‌شن و قیمت زنده فقط برای نشون دادن «هنوز قابل ورود هست یا دیر شده» استفاده می‌شه.</p>') +
     sec('قدم ۱: روند تایم‌فریم‌های بالاتر', '<p style="margin:0">با ساختار قیمت روی ۴ساعته و ۱ساعته ساخته می‌شه. سقف و کف بالاتر (صعودی) یا سقف و کف پایین‌تر (نزولی) و جای قیمت نسبت به میانگین EMA50. خرید فقط در روند صعودی یا بدون‌روند، فروش فقط در روند نزولی یا بدون‌روند. خلاف روند ۴ساعته و ۱ساعته رد می‌شه.</p>') +
     sec('قدم ۲: ناحیه ورود (FVG یا شکار نقدینگی)', '<p style="margin:0"><b>FVG</b> یعنی گپ بین سه کندل پشت‌سرهم که یه حرکت قوی و سریع از خودش جا گذاشته (سایه کندل اول و سوم هم‌پوشانی نداره). قیمت معمولاً برمی‌گرده و این ناحیه رو پر می‌کنه. اپ فقط FVG تازه (حداکثر ۶۰ کندل پیش)، با کندل میانی قوی و بدون بسته شدن کندل از اون طرف رو قبول می‌کنه و قیمت باید توی ناحیه یا خیلی نزدیکش باشه.</p><p style="margin:8px 0 0"><b>شکار نقدینگی</b> یعنی سایه کندل از کف یا سقف قبلی رد بشه (جای استاپ بقیه) ولی کندل پایین یا بالای اون سطح بسته نشه. نشونه‌ی برگشت قیمته. وقتی هر دو با هم باشن، امتیاز بیشتره.</p>') +
@@ -2232,10 +2356,10 @@ document.addEventListener('click', function (e) {
   else if (act === 'btstop') { S.bt.cancel = true; }
   else if (act === 'chk') { var ta = document.getElementById('chk_text'); if (ta) S.chkText = ta.value; runCheck(); }
   else if (act === 'chkenter' || act === 'chkpend') { var cp = enterFromCheck(act === 'chkpend'); S.posMsg = cp ? (cp.status === 'pending' ? 'سفارش لیمیت ' + cp.sym + ' ثبت شد و پیگیری می‌شه.' : 'معامله ' + cp.sym + ' ثبت شد.') : 'ثبت نشد (قبلاً ثبت شده، بودجه‌ی ریسک تموم شده یا سیگنال معتبر نیست).'; if (cp) { S.tab = 'journal'; monitorPos().then(render); } render(); window.scrollTo(0, 0); }
-  else if (act === 'enterlimit') { var rl = S.results[b.getAttribute('data-sym')], lp2 = enterPos(rl, true); S.posMsg = lp2 ? 'سفارش لیمیت ' + lp2.sym + ' ثبت شد. توی تب معاملات پیگیری می‌شه.' : 'ثبت نشد (قبلاً ثبت شده یا بودجه‌ی ریسک تموم شده).'; if (lp2) { S.tab = 'journal'; monitorPos().then(render); } render(); window.scrollTo(0, 0); }
+  else if (act === 'enterlimit') { var rl = recFor(b), lp2 = enterPos(rl, true); S.posMsg = lp2 ? 'سفارش لیمیت ' + lp2.sym + ' ثبت شد. توی تب معاملات پیگیری می‌شه.' : 'ثبت نشد (قبلاً ثبت شده یا بودجه‌ی ریسک تموم شده).'; if (lp2) { S.tab = 'journal'; monitorPos().then(render); } render(); window.scrollTo(0, 0); }
   else if (act === 'pfill') { var fp = openPos().filter(function (x) { return x.id === b.getAttribute('data-id'); })[0]; if (fp) { fp.status = 'open'; fp.openedAt = Date.now(); fp.maxR = 0; save(); render(); } }
   else if (act === 'pcancel') { st.pos = openPos().filter(function (x) { return x.id !== b.getAttribute('data-id'); }); save(); render(); }
-  else if (act === 'enter') { var rr = S.results[b.getAttribute('data-sym')], np = enterPos(rr); S.posMsg = np ? 'معامله ' + np.sym + ' ثبت شد. توی تب معاملات پیگیری می‌شه.' : 'ثبت نشد (یا قبلاً ثبت شده یا بودجه‌ی ریسک تموم شده).'; if (np) { S.tab = 'journal'; monitorPos().then(render); } render(); window.scrollTo(0, 0); }
+  else if (act === 'enter') { var rr = recFor(b), np = enterPos(rr); S.posMsg = np ? 'معامله ' + np.sym + ' ثبت شد. توی تب معاملات پیگیری می‌شه.' : 'ثبت نشد (یا قبلاً ثبت شده یا بودجه‌ی ریسک تموم شده).'; if (np) { S.tab = 'journal'; monitorPos().then(render); } render(); window.scrollTo(0, 0); }
   else if (/^p(tp|be|close|sl|del)$/.test(act)) { posAct(act, b.getAttribute('data-id')); }
   else if (act === 'newsrefresh') { S.newsErr = ''; loadNews(true).then(render); }
   else if (act === 'addnews') {
@@ -2262,7 +2386,7 @@ document.addEventListener('change', function (e) {
   applySet(k, el.type === 'checkbox' ? el.checked : el.value); render();
 });
 document.addEventListener('keydown', function (e) { if (e.key === 'Enter' && e.target.id === 'sym') { e.preventDefault(); var b = document.querySelector('[data-act="analyze"]'); if (b && !b.disabled) b.click(); } });
-document.addEventListener('toggle', function (e) { var d = e.target; if (d && d.matches && d.matches('details.cht')) S.open = d.open ? d.getAttribute('data-sym') : (S.open === d.getAttribute('data-sym') ? '' : S.open); }, true);
+document.addEventListener('toggle', function (e) { var d = e.target; if (d && d.matches && d.matches('details.cht')) { S.cht = S.cht || {}; S.cht[d.getAttribute('data-sym')] = d.open; } }, true);
 
 var lastBucket = Math.floor(Date.now() / 900000);
 setInterval(function () {
